@@ -19,7 +19,8 @@ export function makeOperatorAuth(config: Config) {
   return async function operatorAuth(req: FastifyRequest, reply: FastifyReply) {
     if (!config.OPERATOR_API_KEY) return; // auth disabled (dev)
     const h = req.headers['x-api-key'];
-    const key = Array.isArray(h) ? h[0] : h;
+    // EventSource cannot set headers, so the SSE endpoint may pass ?apiKey=.
+    const key = (Array.isArray(h) ? h[0] : h) ?? (req.query as Record<string, string | undefined>)?.apiKey;
     if (!key || !safeEqual(key, config.OPERATOR_API_KEY)) {
       return reply.code(401).send({ error: 'unauthorized', message: 'Missing or invalid x-api-key' });
     }

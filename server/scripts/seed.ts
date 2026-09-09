@@ -22,7 +22,7 @@ const alpha = repo.createResponder({
   active: true,
 });
 const bravo = repo.createResponder({
-  name: 'Bravo Tactical (webhook)',
+  name: 'Bravo Tactical',
   type: 'armed_response',
   channel: 'webhook',
   channelConfig: { url: process.env.DEMO_RESPONDER_URL ?? 'http://localhost:9999/dispatch' },
