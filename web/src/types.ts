@@ -1,99 +1,132 @@
-export type AlertStatus = 'new' | 'acknowledged' | 'dispatched' | 'dismissed';
-export type Severity = 'low' | 'medium' | 'high' | 'critical';
-export type Priority = 'low' | 'medium' | 'high' | 'critical';
-export type DispatchStatus = 'requested' | 'acknowledged' | 'en_route' | 'on_scene' | 'resolved' | 'cancelled';
+export type Role = 'requester' | 'responder' | 'dispatcher';
+export type Service = 'security' | 'medical' | 'fire';
+export type Priority = 'standard' | 'urgent' | 'critical';
+export type RequestStatus = 'searching' | 'assigned' | 'en_route' | 'arrived' | 'completed' | 'cancelled' | 'unfulfilled';
+export type ResponderStatus = 'offline' | 'available' | 'busy';
+export type OfferStatus = 'pending' | 'accepted' | 'declined' | 'expired' | 'withdrawn';
 
-export interface Alert {
+export interface User {
   id: string;
-  source: string;
-  externalId: string | null;
-  siteId: string | null;
-  siteName: string | null;
-  cameraId: string | null;
-  cameraName: string | null;
-  eventType: string;
-  confidence: number | null;
-  severity: Severity;
-  title: string;
-  description: string | null;
-  snapshotUrl: string | null;
-  clipUrl: string | null;
-  occurredAt: string;
-  receivedAt: string;
-  status: AlertStatus;
-  handledBy: string | null;
-  handledAt: string | null;
-  dispatchId: string | null;
+  role: Role;
+  name: string;
+  phone: string;
 }
 
-export interface Dispatch {
+export interface Responder {
+  userId: string;
+  name: string;
+  phone: string;
+  service: Service;
+  unitName: string;
+  organisation: string | null;
+  vehicle: string | null;
+  status: ResponderStatus;
+  lat: number | null;
+  lng: number | null;
+  heading: number | null;
+  locationAt: string | null;
+  rating: number | null;
+  ratingCount: number;
+  jobsCompleted: number;
+}
+
+export interface HelpRequest {
   id: string;
   reference: string;
-  alertId: string | null;
-  siteId: string | null;
-  siteName: string | null;
-  responderId: string;
-  responderName: string;
+  requesterId: string;
+  requesterName: string;
+  requesterPhone: string;
+  service: Service;
   priority: Priority;
-  reason: string;
-  notes: string | null;
-  requestedBy: string;
-  status: DispatchStatus;
+  lat: number;
+  lng: number;
+  address: string | null;
+  description: string | null;
+  flags: string[];
+  status: RequestStatus;
+  responderId: string | null;
+  etaSeconds: number | null;
   createdAt: string;
   updatedAt: string;
-  closedAt: string | null;
+  assignedAt: string | null;
+  enRouteAt: string | null;
+  arrivedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  rating: number | null;
+  searchStartedAt: string;
 }
 
-export interface DispatchEvent {
+export interface Offer {
   id: string;
-  fromStatus: DispatchStatus | null;
-  toStatus: DispatchStatus;
+  requestId: string;
+  responderId: string;
+  status: OfferStatus;
+  distanceM: number;
+  etaSeconds: number;
+  offeredAt: string;
+  expiresAt: string;
+}
+
+export interface RequestEvent {
+  id: string;
+  type: string;
   actor: string;
   note: string | null;
   createdAt: string;
 }
 
-export interface Delivery {
-  id: string;
-  channel: string;
-  attempt: number;
-  success: boolean;
-  detail: string | null;
-  createdAt: string;
+export interface TrackView {
+  request: HelpRequest;
+  responder: null | {
+    userId: string;
+    name: string;
+    phone: string;
+    unitName: string;
+    organisation: string | null;
+    vehicle: string | null;
+    service: Service;
+    rating: number | null;
+    lat: number | null;
+    lng: number | null;
+    heading: number | null;
+    locationAt: string | null;
+  };
+  distanceM: number | null;
+  etaSeconds: number | null;
+  offersOutstanding: number;
+  offersDeclined: number;
+  events: RequestEvent[];
+  trail: { lat: number; lng: number; at: string }[];
 }
 
-export interface DispatchDetail {
-  dispatch: Dispatch;
-  alert: Alert | null;
-  site: Site | null;
+export interface DetailView {
+  request: HelpRequest;
   responder: Responder | null;
-  events: DispatchEvent[];
-  deliveries: Delivery[];
-  callbackUrl: string;
-  nextStatuses: DispatchStatus[];
+  events: RequestEvent[];
+  offers?: (Offer & { responder?: Responder })[];
+  trail: { lat: number; lng: number; at: string }[];
 }
 
-export interface Responder {
-  id: string;
-  name: string;
-  type: string;
-  channel: string;
-  phone: string | null;
-  active: boolean;
-}
-
-export interface Site {
-  id: string;
-  name: string;
-  address: string | null;
-  defaultResponderId: string | null;
-  notes: string | null;
+export interface Catalogue {
+  services: Service[];
+  flags: Record<Service, { key: string; label: string; priority?: Priority }[]>;
+  matching: { offerTimeoutSeconds: number; searchTimeoutSeconds: number; maxRadiusKm: number };
 }
 
 export interface Stats {
-  newAlerts: number;
-  acknowledgedAlerts: number;
-  activeDispatches: number;
-  dispatches24h: number;
-  alerts24h: number;
+  searching: number;
+  active: number;
+  unfulfilled: number;
+  requests24h: number;
+  respondersAvailable: number;
+  respondersBusy: number;
+  avgAssignSeconds: number | null;
+  avgArrivalSeconds: number | null;
+}
+
+export interface LatLng {
+  lat: number;
+  lng: number;
 }

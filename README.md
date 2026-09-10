@@ -1,44 +1,54 @@
 # Dispatch
 
-A control-room dispatch application for CCTV monitoring. Verified alerts from
-**DeepAlert** (and any other analytics/VMS platform) land in a live operator
-queue. The operator reviews the snapshot and, if the activity is suspicious,
-presses **DISPATCH**. The right responder for that site is notified
-immediately, and the dispatch is tracked from *requested* through *on scene*
-to *resolved*, with a full audit trail of who did what and when.
+On-demand emergency response, the way ride-hailing works. A person who needs
+help taps **Security**, **Medical** or **Fire**. The nearest available units
+are offered the job; the first to accept is assigned, and the requester
+watches them approach on a live map with an ETA until they arrive. A control
+room sees every unit and incident and can step in when nobody accepts.
 
 ```
-DeepAlert ──webhook──▶ Dispatch server ──SSE──▶ Operator console
-                            │                        │
-                            │◀──── DISPATCH button ───┘
-                            │
-                            ├──signed webhook──▶ Armed response / guards / SAPS
-                            └◀── callback URL ─── responder reports en route / on scene / resolved
+ Requester app            Dispatch server                 Responder app
+ ─────────────            ───────────────                 ─────────────
+ tap MEDICAL  ─────────▶  create request
+                          find nearest available
+                          medical units in range ──────▶  offer (20 s countdown)
+                                                  ◀──────  accept
+ "MED-Echo 5, 4 min" ◀──  assign, withdraw other offers
+ live map + ETA      ◀──  location stream         ◀──────  GPS updates
+ "Arrived"           ◀──  status                  ◀──────  en route / arrived / complete
+ rate ★★★★★          ──▶  rating on unit
+
+ Control room: live map of all units and incidents, manual assign, retry, cancel.
 ```
 
 ## Features
 
-- **Inbound alerts** from DeepAlert via webhook, plus a documented generic JSON
-  format for other systems. Sites and cameras are created automatically the
-  first time they are seen, so no alert is ever dropped.
-- **Operator console**: live alert queue (SSE, no polling), snapshot + clip
-  viewer, site notes, one-click dispatch with responder / priority / notes,
-  acknowledge and dismiss, active dispatch board with a status stepper,
-  dispatch drawer with timeline and delivery log, manual dispatch for
-  activity spotted on a live feed.
-- **Responder notification** over pluggable channels: HMAC-signed webhook
-  (with retries) or a log channel for responders reached by radio/phone.
-  Every attempt is recorded.
-- **Dispatch lifecycle** enforced by a state machine:
-  `requested → acknowledged → en_route → on_scene → resolved`, `cancelled`
-  from any open state. Cancelling reopens the alert so it is not lost.
-- **Responder callback URL** with a per-dispatch token so response companies
-  can report progress without an operator login.
-- **Audit log** of every alert receipt, acknowledgement, dispatch and status
-  change, attributed to the operator or responder.
-- API-key auth for operators, per-source shared secrets for webhooks.
-- Single process, SQLite storage (Node's built-in `node:sqlite`, no native
-  build step), Docker image.
+- **One-tap request** with quick situation flags (e.g. *Unconscious*, *Suspects
+  armed*, *People trapped*) that set the priority automatically. GPS location,
+  or tap the map to place the pin.
+- **Uber-style matching**: nearest available units of the right service within
+  a radius are offered the job, N at a time, with a countdown. Declines and
+  timeouts move to the next unit. First acceptance wins; other offers are
+  withdrawn. A unit that comes online or moves into range is picked up
+  immediately. If nobody accepts within the search timeout the request is
+  flagged *unfulfilled* for the control room.
+- **Live tracking** for the requester: unit name, vehicle, organisation,
+  rating, call button, moving marker, trail, distance and ETA. All updates
+  arrive over Server-Sent Events.
+- **Responder app**: online/offline toggle, GPS sharing (or manual pin for
+  desktop demos), incoming offers with distance/ETA/countdown, accept or
+  decline, navigate link, En route → Arrived → Complete, release a job back
+  to the pool.
+- **Control room**: live map of every online unit (dimmed when busy) and open
+  incident, request list with status steppers, request detail with offer
+  history and timeline, manual assignment to any free unit, retry search,
+  cancel. Header shows waiting/active counts and average accept/arrival times.
+- **Privacy by role**: requesters only see their own requests; responders only
+  see jobs offered to or held by them; the event stream is filtered per user.
+- **Audit trail** of every request, offer, acceptance, status change and
+  rating.
+- Single Node process, SQLite (built-in `node:sqlite`, no native build),
+  Docker image, GitHub Actions CI.
 
 ## Quick start
 
@@ -46,21 +56,28 @@ Requires Node 22.13+.
 
 ```bash
 npm install
-cp .env.example .env            # edit the secrets
-npm run build                   # builds the console and the server
-npm run seed                    # demo sites, cameras and responders
-npm start                       # http://localhost:8080
+cp .env.example .env          # set DISPATCHER_CODE at least
+npm run build
+npm start                     # http://localhost:8080
 ```
 
-Open http://localhost:8080, enter your operator name and the
-`OPERATOR_API_KEY` from `.env`. In another terminal, generate test alerts:
+Then, in a second terminal, put a simulated fleet online (7 units around
+Cape Town that accept jobs and drive to the scene):
 
 ```bash
-WEBHOOK_SECRET_DEEPALERT=<secret> npm run simulate -- 5 2000   # 5 alerts, 2s apart
+npm run simulate
+# other city:  CENTER_LAT=-26.2041 CENTER_LNG=28.0473 npm run simulate
 ```
 
-For development with hot reload run `npm run dev` (server on 8080, Vite on
-5173 proxying `/api`).
+Open http://localhost:8080 on your phone or desktop:
+
+1. **I need help** → enter name and number → tap a service → *Request*.
+2. Watch a simulated unit accept, drive in and arrive; rate them.
+3. Open another tab as **Control room** (code from `.env`) to see the map.
+4. Open a third tab as **I'm a responder** to play a real unit: set up your
+   call sign, go online (allow location or tap the map), accept an offer.
+
+`npm run dev` runs the server on 8080 and Vite on 5173 with hot reload.
 
 ### Docker
 
@@ -68,168 +85,107 @@ For development with hot reload run `npm run dev` (server on 8080, Vite on
 docker compose up --build
 ```
 
-Set secrets through the environment (see `docker-compose.yml`). Data lives in
+Set `DISPATCHER_CODE` and `PUBLIC_BASE_URL` in the environment. Data lives in
 the `dispatch-data` volume.
 
-## Connecting DeepAlert
+## How matching works
 
-1. In the DeepAlert management interface, configure a delivery endpoint /
-   webhook for the sites you monitor:
+Configured through `.env` (defaults in brackets):
 
-   ```
-   URL:     https://<your-host>/api/webhooks/deepalert
-   Method:  POST, JSON body
-   Header:  x-webhook-secret: <WEBHOOK_SECRET_DEEPALERT>
-            (Authorization: Bearer <secret> or ?token=<secret> also accepted)
-   ```
+| Setting | Meaning |
+|---------|---------|
+| `OFFER_FANOUT` [3] | how many nearest units are asked at once. `1` gives strict one-at-a-time Uber behaviour. |
+| `OFFER_TIMEOUT_SECONDS` [20] | time a unit has to accept before the offer expires and the next unit is asked. |
+| `MAX_RADIUS_KM` [30] | units further than this are not considered. |
+| `LOCATION_STALE_SECONDS` [300] | units whose last GPS fix is older are skipped. |
+| `SEARCH_TIMEOUT_SECONDS` [300] | with no acceptance after this the request becomes *unfulfilled* and the control room is alerted. |
+| `AVERAGE_SPEED_KMH` [45] | ETA = straight-line × 1.3 road factor ÷ speed + 60 s. |
 
-2. Send a test alert. The server answers `202` with the created alert ids.
+Request lifecycle:
 
-3. Check the alert appears in the console with the right site and camera. The
-   adapter reads each field from a list of candidate keys
-   (`server/src/integrations/inbound/deepalert.ts`, `DEEPALERT_FIELD_MAP`):
-
-   | Field        | Candidate keys (first non-empty wins)                                   |
-   |--------------|--------------------------------------------------------------------------|
-   | externalId   | `alert_id`, `alertId`, `event_id`, `eventId`, `id`, `uuid`               |
-   | site ref     | `site_id`, `siteId`, `site.id`, `location_id`, `client_site_id`          |
-   | site name    | `site_name`, `siteName`, `site.name`, `location`, `location_name`        |
-   | camera ref   | `camera_id`, `cameraId`, `camera.id`, `channel_id`, `device_id`          |
-   | camera name  | `camera_name`, `cameraName`, `camera.name`, `camera`, `channel_name`     |
-   | event type   | `event_type`, `eventType`, `detection_type`, `type`, `rule`, `label`, …  |
-   | confidence   | `confidence`, `probability`, `score` (0–1, 0–100 or `"95%"` all accepted)|
-   | snapshot     | `snapshot_url`, `image_url`, `imageUrl`, `image`, `thumbnail_url`, …     |
-   | clip         | `clip_url`, `video_url`, `videoUrl`, `playback_url`, …                   |
-   | occurred at  | `timestamp`, `event_time`, `occurred_at`, `detected_at`, `time`          |
-
-   If your DeepAlert profile uses different key names, add them to the map.
-   Batched deliveries (`{ alerts: [...] }`, `{ events: [...] }` or a bare
-   array) are supported. Alerts are idempotent on `(source, externalId)`.
-
-4. Optionally set `MIN_CONFIDENCE` (e.g. `0.6`) to auto-dismiss low-confidence
-   detections. They are still stored and visible under the *dismissed* tab.
-
-Severity is derived from the event type (weapon/panic/fire → critical,
-intrusion/breach/tailgating → high, person/vehicle/loitering → medium, high
-confidence promotes medium → high) and pre-selects the dispatch priority.
-
-### Other sources
-
-`POST /api/webhooks/generic` accepts:
-
-```json
-{
-  "id": "evt-123",
-  "site": { "ref": "SITE-1", "name": "Riverside Depot" },
-  "camera": { "ref": "CAM-4", "name": "Main Gate" },
-  "eventType": "person",
-  "confidence": 0.93,
-  "severity": "high",
-  "snapshotUrl": "https://…/snap.jpg",
-  "clipUrl": "https://…/clip.mp4",
-  "occurredAt": "2026-09-09T10:00:00Z"
-}
+```
+searching ─▶ assigned ─▶ en_route ─▶ arrived ─▶ completed
+    │            │           │
+    │            └───────────┴──▶ searching   (responder releases the job)
+    ├──▶ unfulfilled ──▶ searching            (dispatcher retry / manual assign)
+    └──▶ cancelled  (requester or dispatcher, any open state)
 ```
 
-Adding a new source is one file implementing `InboundAdapter` and one line in
-`server/src/integrations/inbound/registry.ts`.
+Priorities: security requests are *standard* unless flagged; medical and fire
+are *urgent* by default; flags such as *armed*, *not breathing*, *people
+trapped* make a request *critical*. Priority is shown to units and the
+control room; matching order is by distance.
 
-## Notifying responders
+## Roles and sign-in
 
-Each responder has a `channel`:
+Sign-in is by mobile number and name and issues a bearer token; one account
+per (number, role). Dispatchers must also supply `DISPATCHER_CODE`.
 
-- **`webhook`** — `channelConfig: { "url": "https://…", "headers": { … } }`.
-  The server POSTs the payload below, signed with
-  `x-dispatch-signature: sha256=<HMAC-SHA256(body, DISPATCH_SIGNING_SECRET)>`,
-  retrying up to 3 times.
-- **`log`** — records the dispatch only; the operator phones/radios the
-  responder. Use this for response companies without an API.
-
-Adding SMS, email or push is one file implementing `OutboundChannel` in
-`server/src/integrations/outbound/`.
-
-Webhook payload:
-
-```json
-{
-  "type": "dispatch.requested",
-  "dispatch": {
-    "id": "…", "reference": "DSP-7KQ2M", "priority": "critical",
-    "reason": "Perimeter Breach 91% · Yard West Fence",
-    "notes": "Two males with bolt cutters at west fence",
-    "requestedBy": "T. Naidoo (Shift B)", "requestedAt": "2026-09-09T10:00:05Z",
-    "callbackUrl": "https://<host>/api/dispatches/callback/DSP-7KQ2M?token=…"
-  },
-  "site": { "id": "…", "name": "Riverside Logistics Depot", "address": "…", "latitude": -33.9, "longitude": 18.4, "notes": "Gate code 4471" },
-  "alert": { "id": "…", "source": "deepalert", "eventType": "perimeter_breach", "confidence": 0.91, "severity": "high", "camera": "Yard West Fence", "snapshotUrl": "…", "clipUrl": "…", "occurredAt": "…" }
-}
-```
-
-The responder reports progress by POSTing to `callbackUrl`:
-
-```json
-{ "status": "en_route", "actor": "Vehicle 12", "note": "ETA 6 min" }
-```
-
-The reference (`DSP-XXXXX`) avoids 0/O/1/I so it can be read over the radio.
+> Production note: put an SMS one-time-code step in front of
+> `POST /api/auth/login` before exposing this publicly. The token model stays
+> the same.
 
 ## API
 
-All operator endpoints require `x-api-key: <OPERATOR_API_KEY>`; the optional
-`x-operator: <name>` header attributes actions to a person.
+All endpoints except login and the catalogue require
+`Authorization: Bearer <token>` (or `?token=` for the SSE stream).
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/health` | liveness, registered sources and channels |
-| POST | `/api/webhooks/:source` | inbound alerts (`deepalert`, `generic`) |
-| GET | `/api/alerts?status=new,acknowledged&siteId=&limit=` | list alerts |
-| GET | `/api/alerts/:id` · `/api/alerts/:id/raw` | alert with dispatches · original payload |
-| POST | `/api/alerts/:id/acknowledge` · `/dismiss` | operator triage |
-| POST | `/api/alerts/:id/dispatch` | **the dispatch button** `{ responderId?, priority, notes? }` |
-| GET/POST | `/api/dispatches` | list · manual dispatch `{ siteId, responderId?, priority, reason }` |
-| GET | `/api/dispatches/:id` | dispatch with alert, site, responder, timeline, deliveries |
-| POST | `/api/dispatches/:id/status` | `{ status, note? }` |
-| POST | `/api/dispatches/:id/redeliver` | retry responder notification |
-| POST | `/api/dispatches/callback/:reference?token=` | responder status update (token auth) |
-| GET/POST/PATCH | `/api/responders`, `/api/sites` | configuration |
-| GET | `/api/stats` · `/api/audit` | dashboard counters · audit trail |
-| GET | `/api/events` | Server-Sent Events stream (`?apiKey=` for browsers) |
-
-If `responderId` is omitted the site's `defaultResponderId` is used.
+| Method | Path | Role | Purpose |
+|--------|------|------|---------|
+| POST | `/api/auth/login` | – | `{ role, name, phone, dispatcherCode? }` → `{ token, user }` |
+| GET | `/api/catalogue` | – | services, quick flags, matching parameters |
+| GET | `/api/auth/me` | any | current user (+ responder profile) |
+| POST | `/api/requests` | requester | `{ service, lat, lng, address?, description?, flags? }` |
+| GET | `/api/requests/mine` | requester | my requests |
+| GET | `/api/requests/:id/track` | owner / unit / dispatcher | status, unit, position, distance, ETA, trail |
+| POST | `/api/requests/:id/cancel` | requester, dispatcher | `{ reason? }` |
+| POST | `/api/requests/:id/rate` | requester | `{ rating 1–5, comment? }` |
+| GET/PUT | `/api/responders/me` | responder | profile, active job, pending offers / save profile |
+| POST | `/api/responders/me/status` | responder | `{ status: available \| offline }` |
+| POST | `/api/responders/me/location` | responder | `{ lat, lng, heading? }` |
+| POST | `/api/offers/:id/accept` · `/decline` | responder | respond to an offer |
+| POST | `/api/requests/:id/progress` | responder | `{ status: en_route \| arrived \| completed, note? }` |
+| POST | `/api/requests/:id/release` | responder | give the job back to the pool |
+| GET | `/api/requests?status=` · `/api/responders` | dispatcher | lists |
+| GET | `/api/requests/:id` | dispatcher (+ owner/unit) | detail with offers and timeline |
+| POST | `/api/requests/:id/assign` · `/retry` | dispatcher | `{ responderId }` / restart search |
+| GET | `/api/stats` · `/api/audit` | dispatcher | counters, audit log |
+| GET | `/api/events` | any | SSE: `request.*`, `offer.*`, `responder.*`, filtered per user |
 
 ## Project layout
 
 ```
 server/src
-  app.ts                    Fastify wiring, error mapping, static console
-  config.ts                 environment → typed config
-  db/schema.sql, db.ts      SQLite schema and connection
-  domain/                   types, dispatch state machine, ids
-  integrations/inbound/     DeepAlert + generic adapters
-  integrations/outbound/    webhook + log channels
-  services/                 repositories, AlertService, DispatchService, EventBus
-  routes/                   webhooks, alerts, dispatches, admin, events (SSE)
-server/test                 vitest: adapters, state machine, end-to-end API
-server/scripts              seed.ts, simulate.ts
-web/src                     React operator console
+  app.ts                       Fastify wiring, auth hook, error mapping, 1 s matching tick
+  config.ts                    environment → typed config
+  db/schema.sql, db.ts         SQLite schema and connection
+  domain/                      types + flags, geo maths, request state machine, ids
+  services/dispatchService.ts  matching engine and request/offer/job lifecycle
+  services/authService.ts      phone sign-in, bearer tokens
+  services/repositories.ts     SQL access
+  routes/                      auth, requester, responder, dispatcher, SSE
+server/test                    vitest: geo, state machine, matching scenarios, HTTP flows
+server/scripts/simulate.ts     demo fleet that accepts and drives to jobs
+web/src/screens                RequesterScreen, ResponderScreen, DispatcherScreen
+web/src/components             Leaflet map wrapper, login, shared UI
 ```
 
 ```bash
-npm test          # server tests
-npm run typecheck # both packages
+npm test            # server tests
+npm run typecheck   # both packages
 ```
 
-## Configuration
-
-See `.env.example`. Leaving `OPERATOR_API_KEY` or a webhook secret empty
-disables that check, which is only appropriate for local development.
+Maps use OpenStreetMap tiles; the browser needs internet access to
+`tile.openstreetmap.org`.
 
 ## Roadmap / not yet included
 
-- Operator accounts and roles (currently a shared API key + free-text name).
-- SMS / email / push channels (interface is in place).
-- Map view and nearest-responder selection using site coordinates.
-- Reporting (response times per responder and site).
+- SMS one-time-code verification and push notifications for responders when
+  the app is in the background.
+- Payments / subscriptions for paid response.
+- Turn-by-turn routing and road-based ETAs (currently straight-line estimate).
+- Organisation admin: manage units, shifts and coverage areas.
+- Reporting exports.
 
 ## License
 

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
 export type ConnectionState = 'connecting' | 'live' | 'offline';
+const TYPES = ['request.created', 'request.updated', 'offer.created', 'offer.updated', 'responder.updated', 'responder.location'];
 
-/** Subscribe to the server's SSE stream; invokes onEvent(type, data) for each domain event. */
-export function useEvents(url: string, onEvent: (type: string, data: unknown) => void): ConnectionState {
+export function useEvents(url: string | null, onEvent: (type: string, data: unknown) => void): ConnectionState {
   const [state, setState] = useState<ConnectionState>('connecting');
   const handler = useRef(onEvent);
   handler.current = onEvent;
@@ -16,18 +16,16 @@ export function useEvents(url: string, onEvent: (type: string, data: unknown) =>
     let es: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
-
     const connect = () => {
       setState('connecting');
       es = new EventSource(url);
       es.addEventListener('hello', () => setState('live'));
-      for (const type of ['alert.created', 'alert.updated', 'dispatch.created', 'dispatch.updated', 'dispatch.delivery']) {
+      for (const type of TYPES) {
         es.addEventListener(type, (e) => {
           try {
-            const evt = JSON.parse((e as MessageEvent).data);
-            handler.current(type, evt.data);
+            handler.current(type, JSON.parse((e as MessageEvent).data).data);
           } catch {
-            /* ignore malformed */
+            /* ignore */
           }
         });
       }
@@ -44,6 +42,5 @@ export function useEvents(url: string, onEvent: (type: string, data: unknown) =>
       es?.close();
     };
   }, [url]);
-
   return state;
 }

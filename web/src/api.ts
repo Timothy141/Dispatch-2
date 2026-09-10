@@ -1,24 +1,23 @@
-import type { Alert, Dispatch, DispatchDetail, DispatchStatus, Priority, Responder, Site, Stats } from './types';
+import type { Catalogue, DetailView, HelpRequest, LatLng, Offer, Responder, Role, Service, Stats, TrackView, User } from './types';
 
 export interface Session {
-  apiKey: string;
-  operator: string;
+  token: string;
+  user: User;
 }
 
-const KEY = 'dispatch.session';
-
-export function loadSession(): Session {
+const KEY = 'dispatch.session.v2';
+export function loadSession(): Session | null {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return JSON.parse(raw);
+    return raw ? (JSON.parse(raw) as Session) : null;
   } catch {
-    /* ignore */
+    return null;
   }
-  return { apiKey: '', operator: '' };
 }
-export function saveSession(s: Session) {
+export function saveSession(s: Session | null) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(s));
+    if (s) localStorage.setItem(KEY, JSON.stringify(s));
+    else localStorage.removeItem(KEY);
   } catch {
     /* ignore */
   }
@@ -33,47 +32,59 @@ export class ApiError extends Error {
   }
 }
 
-export function createApi(session: Session) {
-  const headers = () => ({
-    'content-type': 'application/json',
-    ...(session.apiKey ? { 'x-api-key': session.apiKey } : {}),
-    ...(session.operator ? { 'x-operator': session.operator } : {}),
+async function call<T>(method: string, url: string, token: string | null, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    headers: { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
-
-  async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
-    const res = await fetch(url, { method, headers: headers(), body: body === undefined ? undefined : JSON.stringify(body) });
-    if (!res.ok) {
-      let message = res.statusText;
-      try {
-        const j = await res.json();
-        message = j.message ?? j.error ?? message;
-      } catch {
-        /* ignore */
-      }
-      throw new ApiError(res.status, message);
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const j = await res.json();
+      message = j.message ?? j.error ?? message;
+    } catch {
+      /* ignore */
     }
-    return res.json() as Promise<T>;
+    throw new ApiError(res.status, message);
   }
+  return res.json() as Promise<T>;
+}
 
+export const publicApi = {
+  login: (body: { role: Role; name: string; phone: string; dispatcherCode?: string }) =>
+    call<{ user: User; token: string; responder: Responder | null }>('POST', '/api/auth/login', null, body),
+  catalogue: () => call<Catalogue>('GET', '/api/catalogue', null),
+};
+
+export function createApi(token: string) {
+  const c = <T>(method: string, url: string, body?: unknown) => call<T>(method, url, token, body);
   return {
-    health: () => call<{ ok: boolean }>('GET', '/api/health'),
-    stats: () => call<Stats>('GET', '/api/stats'),
-    alerts: (status: string) => call<Alert[]>('GET', `/api/alerts?status=${status}&limit=200`),
-    alert: (id: string) => call<Alert & { dispatches: Dispatch[] }>('GET', `/api/alerts/${id}`),
-    acknowledge: (id: string) => call<Alert>('POST', `/api/alerts/${id}/acknowledge`),
-    dismiss: (id: string, reason?: string) => call<Alert>('POST', `/api/alerts/${id}/dismiss`, { reason }),
-    dispatchAlert: (id: string, body: { responderId: string | null; priority: Priority; notes?: string; reason?: string }) =>
-      call<Dispatch>('POST', `/api/alerts/${id}/dispatch`, body),
-    createDispatch: (body: { siteId: string; responderId: string | null; priority: Priority; reason: string; notes?: string }) =>
-      call<Dispatch>('POST', '/api/dispatches', body),
-    dispatches: (status: string) => call<Dispatch[]>('GET', `/api/dispatches?status=${status}&limit=200`),
-    dispatch: (id: string) => call<DispatchDetail>('GET', `/api/dispatches/${id}`),
-    setDispatchStatus: (id: string, status: DispatchStatus, note?: string) =>
-      call<Dispatch>('POST', `/api/dispatches/${id}/status`, { status, note }),
-    redeliver: (id: string) => call<{ delivered: boolean }>('POST', `/api/dispatches/${id}/redeliver`),
-    responders: () => call<Responder[]>('GET', '/api/responders'),
-    sites: () => call<Site[]>('GET', '/api/sites'),
-    eventsUrl: () => `/api/events${session.apiKey ? `?apiKey=${encodeURIComponent(session.apiKey)}` : ''}`,
+    me: () => c<{ user: User; responder: Responder | null }>('GET', '/api/auth/me'),
+    // requester
+    createRequest: (body: { service: Service; lat: number; lng: number; address?: string; description?: string; flags?: string[] }) =>
+      c<HelpRequest>('POST', '/api/requests', body),
+    myRequests: () => c<HelpRequest[]>('GET', '/api/requests/mine'),
+    track: (id: string) => c<TrackView>('GET', `/api/requests/${id}/track`),
+    detail: (id: string) => c<DetailView>('GET', `/api/requests/${id}`),
+    cancel: (id: string, reason?: string) => c<HelpRequest>('POST', `/api/requests/${id}/cancel`, { reason }),
+    rate: (id: string, rating: number, comment?: string) => c<HelpRequest>('POST', `/api/requests/${id}/rate`, { rating, comment }),
+    // responder
+    responderMe: () => c<{ responder: Responder | null; activeJob: HelpRequest | null; offers: { offer: Offer; request: HelpRequest }[] }>('GET', '/api/responders/me'),
+    saveProfile: (body: { service: Service; unitName: string; vehicle?: string; organisation?: string }) => c<Responder>('PUT', '/api/responders/me', body),
+    setStatus: (status: 'available' | 'offline') => c<Responder>('POST', '/api/responders/me/status', { status }),
+    setLocation: (p: LatLng & { heading?: number | null }) => c<Responder>('POST', '/api/responders/me/location', p),
+    accept: (offerId: string) => c<HelpRequest>('POST', `/api/offers/${offerId}/accept`),
+    decline: (offerId: string) => c<{ ok: true }>('POST', `/api/offers/${offerId}/decline`),
+    progress: (id: string, status: 'en_route' | 'arrived' | 'completed', note?: string) => c<HelpRequest>('POST', `/api/requests/${id}/progress`, { status, note }),
+    release: (id: string, reason?: string) => c<HelpRequest>('POST', `/api/requests/${id}/release`, { reason }),
+    // dispatcher
+    requests: (status: string) => c<HelpRequest[]>('GET', `/api/requests?status=${status}&limit=200`),
+    responders: () => c<Responder[]>('GET', '/api/responders'),
+    assign: (id: string, responderId: string) => c<HelpRequest>('POST', `/api/requests/${id}/assign`, { responderId }),
+    retry: (id: string) => c<HelpRequest>('POST', `/api/requests/${id}/retry`),
+    stats: () => c<Stats>('GET', '/api/stats'),
+    eventsUrl: () => `/api/events?token=${encodeURIComponent(token)}`,
   };
 }
 export type Api = ReturnType<typeof createApi>;

@@ -1,144 +1,148 @@
-export const ALERT_STATUSES = ['new', 'acknowledged', 'dispatched', 'dismissed'] as const;
-export type AlertStatus = (typeof ALERT_STATUSES)[number];
+export const ROLES = ['requester', 'responder', 'dispatcher'] as const;
+export type Role = (typeof ROLES)[number];
 
-export const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
-export type Severity = (typeof SEVERITIES)[number];
+export const SERVICES = ['security', 'medical', 'fire'] as const;
+export type Service = (typeof SERVICES)[number];
 
-export const PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
+export const PRIORITIES = ['standard', 'urgent', 'critical'] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
-export const DISPATCH_STATUSES = [
-  'requested',
-  'acknowledged',
+export const RESPONDER_STATUSES = ['offline', 'available', 'busy'] as const;
+export type ResponderStatus = (typeof RESPONDER_STATUSES)[number];
+
+export const REQUEST_STATUSES = [
+  'searching',
+  'assigned',
   'en_route',
-  'on_scene',
-  'resolved',
+  'arrived',
+  'completed',
   'cancelled',
+  'unfulfilled',
 ] as const;
-export type DispatchStatus = (typeof DISPATCH_STATUSES)[number];
+export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
-export const RESPONDER_TYPES = [
-  'armed_response',
-  'guard',
-  'police',
-  'medical',
-  'fire',
-  'maintenance',
-  'other',
-] as const;
-export type ResponderType = (typeof RESPONDER_TYPES)[number];
+export const OFFER_STATUSES = ['pending', 'accepted', 'declined', 'expired', 'withdrawn'] as const;
+export type OfferStatus = (typeof OFFER_STATUSES)[number];
 
-export const CHANNELS = ['webhook', 'log'] as const;
-export type Channel = (typeof CHANNELS)[number];
+/** Quick-tap situation flags per service; some escalate priority. */
+export const SERVICE_FLAGS: Record<Service, { key: string; label: string; priority?: Priority }[]> = {
+  security: [
+    { key: 'in_progress', label: 'Happening right now', priority: 'urgent' },
+    { key: 'armed', label: 'Suspects armed', priority: 'critical' },
+    { key: 'injured', label: 'Someone injured', priority: 'critical' },
+    { key: 'break_in', label: 'Break-in / intruder' },
+    { key: 'hijacking', label: 'Hijacking / robbery', priority: 'critical' },
+    { key: 'suspicious', label: 'Suspicious person or vehicle' },
+  ],
+  medical: [
+    { key: 'unconscious', label: 'Unconscious', priority: 'critical' },
+    { key: 'not_breathing', label: 'Not breathing / no pulse', priority: 'critical' },
+    { key: 'bleeding', label: 'Severe bleeding', priority: 'critical' },
+    { key: 'chest_pain', label: 'Chest pain / stroke signs', priority: 'critical' },
+    { key: 'accident', label: 'Vehicle accident', priority: 'urgent' },
+    { key: 'child', label: 'Child or infant', priority: 'urgent' },
+  ],
+  fire: [
+    { key: 'people_trapped', label: 'People trapped', priority: 'critical' },
+    { key: 'building', label: 'Building on fire', priority: 'critical' },
+    { key: 'vehicle', label: 'Vehicle fire', priority: 'urgent' },
+    { key: 'veld', label: 'Veld / grass fire' },
+    { key: 'gas', label: 'Gas leak / chemicals', priority: 'critical' },
+    { key: 'smoke_only', label: 'Smoke only, no flames' },
+  ],
+};
 
-export interface Site {
-  id: string;
-  name: string;
-  address: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  externalRef: string | null;
-  defaultResponderId: string | null;
-  notes: string | null;
-  createdAt: string;
-  updatedAt: string;
+export function priorityFor(service: Service, flags: string[]): Priority {
+  const defs = SERVICE_FLAGS[service];
+  let p: Priority = service === 'security' ? 'standard' : 'urgent'; // medical & fire are urgent by default
+  for (const f of flags) {
+    const def = defs.find((d) => d.key === f);
+    if (def?.priority === 'critical') return 'critical';
+    if (def?.priority === 'urgent') p = 'urgent';
+  }
+  return p;
 }
 
-export interface Camera {
+export interface User {
   id: string;
-  siteId: string;
+  role: Role;
   name: string;
-  externalRef: string | null;
+  phone: string;
   createdAt: string;
+  lastSeenAt: string;
 }
 
 export interface Responder {
-  id: string;
+  userId: string;
   name: string;
-  type: ResponderType;
-  channel: Channel;
-  channelConfig: Record<string, unknown>;
-  phone: string | null;
-  email: string | null;
-  active: boolean;
-  createdAt: string;
+  phone: string;
+  service: Service;
+  unitName: string;
+  organisation: string | null;
+  vehicle: string | null;
+  capabilities: string[];
+  status: ResponderStatus;
+  lat: number | null;
+  lng: number | null;
+  heading: number | null;
+  locationAt: string | null;
+  rating: number | null;
+  ratingCount: number;
+  jobsCompleted: number;
   updatedAt: string;
 }
 
-export interface Alert {
-  id: string;
-  source: string;
-  externalId: string | null;
-  siteId: string | null;
-  siteName: string | null;
-  cameraId: string | null;
-  cameraName: string | null;
-  eventType: string;
-  confidence: number | null;
-  severity: Severity;
-  title: string;
-  description: string | null;
-  snapshotUrl: string | null;
-  clipUrl: string | null;
-  occurredAt: string;
-  receivedAt: string;
-  status: AlertStatus;
-  handledBy: string | null;
-  handledAt: string | null;
-  dispatchId: string | null;
-}
-
-export interface Dispatch {
+export interface Request {
   id: string;
   reference: string;
-  alertId: string | null;
-  siteId: string | null;
-  siteName: string | null;
-  responderId: string;
-  responderName: string;
+  requesterId: string;
+  requesterName: string;
+  requesterPhone: string;
+  service: Service;
   priority: Priority;
-  reason: string;
-  notes: string | null;
-  requestedBy: string;
-  status: DispatchStatus;
+  lat: number;
+  lng: number;
+  address: string | null;
+  description: string | null;
+  flags: string[];
+  status: RequestStatus;
+  responderId: string | null;
+  etaSeconds: number | null;
   createdAt: string;
   updatedAt: string;
-  closedAt: string | null;
+  assignedAt: string | null;
+  enRouteAt: string | null;
+  arrivedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  rating: number | null;
+  ratingComment: string | null;
+  searchStartedAt: string;
 }
 
-export interface DispatchEvent {
+export interface Offer {
   id: string;
-  dispatchId: string;
-  fromStatus: DispatchStatus | null;
-  toStatus: DispatchStatus;
+  requestId: string;
+  responderId: string;
+  status: OfferStatus;
+  distanceM: number;
+  etaSeconds: number;
+  offeredAt: string;
+  expiresAt: string;
+  respondedAt: string | null;
+}
+
+export interface RequestEvent {
+  id: string;
+  requestId: string;
+  type: string;
   actor: string;
   note: string | null;
   createdAt: string;
 }
 
-export interface DispatchDelivery {
-  id: string;
-  dispatchId: string;
-  channel: string;
-  attempt: number;
-  success: boolean;
-  detail: string | null;
-  createdAt: string;
-}
-
-/** A source-agnostic alert produced by an inbound adapter. */
-export interface NormalizedAlert {
-  source: string;
-  externalId: string | null;
-  site: { externalRef: string | null; name: string | null };
-  camera: { externalRef: string | null; name: string | null };
-  eventType: string;
-  confidence: number | null;
-  severity: Severity;
-  title: string;
-  description: string | null;
-  snapshotUrl: string | null;
-  clipUrl: string | null;
-  occurredAt: string;
-  raw: unknown;
+export interface LatLng {
+  lat: number;
+  lng: number;
 }

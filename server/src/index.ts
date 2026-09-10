@@ -5,7 +5,7 @@ const { PORT, HOST } = app.ctx.config;
 
 try {
   await app.listen({ port: PORT, host: HOST });
-  app.log.info(`Dispatch server ready. Webhooks: POST /api/webhooks/{${[...app.ctx.inbound.keys()].join('|')}}`);
+  app.log.info('Dispatch server ready');
 } catch (err) {
   app.log.error(err);
   process.exit(1);

@@ -1,271 +1,181 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
-import { sign } from '../src/integrations/outbound/webhook.js';
-
-const OPERATOR_KEY = 'op-key';
-const DA_SECRET = 'da-secret';
-const SIGNING = 'sign-secret';
+import { CBD, north } from './helpers.js';
 
 type App = Awaited<ReturnType<typeof buildApp>>;
 
-function makeFetch(status = 200) {
-  const calls: Array<{ url: string; init: RequestInit }> = [];
-  const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(url), init: init ?? {} });
-    return new Response(status === 200 ? 'ok' : 'nope', { status });
-  }) as unknown as typeof fetch;
-  return { fetchImpl, calls };
-}
-
-async function build(fetchImpl?: typeof fetch): Promise<App> {
+async function build(): Promise<App> {
   return buildApp({
     logger: false,
-    fetchImpl,
-    awaitDelivery: true,
-    retryDelayMs: 1,
-    env: {
-      DATABASE_PATH: ':memory:',
-      OPERATOR_API_KEY: OPERATOR_KEY,
-      WEBHOOK_SECRET_DEEPALERT: DA_SECRET,
-      DISPATCH_SIGNING_SECRET: SIGNING,
-      PUBLIC_BASE_URL: 'https://dispatch.example',
-      WEB_DIST: '/nonexistent',
-    },
+    autoTick: false,
+    env: { DATABASE_PATH: ':memory:', DISPATCHER_CODE: 'ctrl', OFFER_FANOUT: '1', WEB_DIST: '/nonexistent' },
   });
 }
 
-const op = { 'x-api-key': OPERATOR_KEY, 'x-operator': 'alice' };
-
-describe('dispatch API', () => {
+describe('HTTP API', () => {
   let app: App;
-  let fetchMock: ReturnType<typeof makeFetch>;
-
   beforeEach(async () => {
-    fetchMock = makeFetch();
-    app = await build(fetchMock.fetchImpl);
+    app = await build();
   });
   afterEach(async () => {
     await app.close();
   });
 
-  async function seedResponder(channel: 'webhook' | 'log' = 'webhook') {
-    const res = await app.inject({
+  const login = async (body: Record<string, unknown>) => {
+    const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: body });
+    return { status: res.statusCode, ...(res.json() as { token: string; user: { id: string } }) };
+  };
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+  it('rejects anonymous and wrong-role access, and bad dispatcher codes', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/requests/mine' })).statusCode).toBe(401);
+    const bad = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { role: 'dispatcher', name: 'x', phone: '0210000000', dispatcherCode: 'nope' } });
+    expect(bad.statusCode).toBe(403);
+    const { token } = await login({ role: 'requester', name: 'Thandi', phone: '082 111 1111' });
+    expect((await app.inject({ method: 'GET', url: '/api/requests', headers: bearer(token) })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url: '/api/responders/me/status', headers: bearer(token), payload: { status: 'available' } })).statusCode).toBe(403);
+  });
+
+  it('runs the Uber-style flow end to end over HTTP', async () => {
+    // responder signs in, sets profile, goes online at a location
+    const medic = await login({ role: 'responder', name: 'Sipho', phone: '0832222222' });
+    const h = bearer(medic.token);
+    expect((await app.inject({ method: 'PUT', url: '/api/responders/me', headers: h, payload: { service: 'medical', unitName: 'MED-7', vehicle: 'Ambulance CA 123' } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: '/api/responders/me/status', headers: h, payload: { status: 'available' } })).json().status).toBe('available');
+    const near = north(CBD, 2);
+    await app.inject({ method: 'POST', url: '/api/responders/me/location', headers: h, payload: { lat: near.lat, lng: near.lng, heading: 90 } });
+
+    // person in trouble taps MEDICAL
+    const who = await login({ role: 'requester', name: 'Thandi', phone: '0821111111' });
+    const w = bearer(who.token);
+    const created = await app.inject({
       method: 'POST',
-      url: '/api/responders',
-      headers: op,
-      payload: {
-        name: 'Alpha Armed Response',
-        type: 'armed_response',
-        channel,
-        channelConfig: channel === 'webhook' ? { url: 'https://responder.example/hook' } : {},
-      },
+      url: '/api/requests',
+      headers: w,
+      payload: { service: 'medical', ...CBD, address: 'Long St, Cape Town', description: 'Man collapsed', flags: ['unconscious'] },
     });
-    expect(res.statusCode).toBe(201);
-    return res.json();
-  }
+    expect(created.statusCode).toBe(201);
+    const req = created.json();
+    expect(req.reference).toMatch(/^MED-[A-Z2-9]{5}$/);
+    expect(req.priority).toBe('critical');
+    expect(req.status).toBe('searching');
 
-  async function postDeepAlert(payload: unknown, secret = DA_SECRET) {
-    return app.inject({
-      method: 'POST',
-      url: '/api/webhooks/deepalert',
-      headers: { 'x-webhook-secret': secret },
-      payload,
-    });
-  }
+    // the responder sees the offer with distance and ETA
+    const me = (await app.inject({ method: 'GET', url: '/api/responders/me', headers: h })).json();
+    expect(me.offers).toHaveLength(1);
+    expect(me.offers[0].request.id).toBe(req.id);
+    expect(me.offers[0].offer.distanceM).toBeGreaterThan(1500);
+    expect(me.offers[0].offer.etaSeconds).toBeGreaterThan(60);
 
-  it('rejects operator calls without the API key', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/alerts' });
-    expect(res.statusCode).toBe(401);
+    // requester's tracking view while searching
+    let track = (await app.inject({ method: 'GET', url: `/api/requests/${req.id}/track`, headers: w })).json();
+    expect(track.offersOutstanding).toBe(1);
+    expect(track.responder).toBeNull();
+
+    // accept
+    const accepted = await app.inject({ method: 'POST', url: `/api/offers/${me.offers[0].offer.id}/accept`, headers: h });
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json().status).toBe('assigned');
+
+    // requester now sees who is coming, sanitised responder profile only
+    track = (await app.inject({ method: 'GET', url: `/api/requests/${req.id}/track`, headers: w })).json();
+    expect(track.responder.unitName).toBe('MED-7');
+    expect(track.responder.vehicle).toBe('Ambulance CA 123');
+    expect(track.responder.lat).toBeCloseTo(near.lat, 5);
+    expect(track.etaSeconds).toBeGreaterThan(0);
+    expect(Object.keys(track.responder)).not.toContain('ratingCount');
+
+    // another requester cannot see it
+    const other = await login({ role: 'requester', name: 'Other', phone: '0829999999' });
+    expect((await app.inject({ method: 'GET', url: `/api/requests/${req.id}/track`, headers: bearer(other.token) })).statusCode).toBe(403);
+
+    // responder drives, arrives, completes
+    expect((await app.inject({ method: 'POST', url: `/api/requests/${req.id}/progress`, headers: h, payload: { status: 'en_route' } })).json().status).toBe('en_route');
+    await app.inject({ method: 'POST', url: '/api/responders/me/location', headers: h, payload: { lat: CBD.lat, lng: CBD.lng } });
+    track = (await app.inject({ method: 'GET', url: `/api/requests/${req.id}/track`, headers: w })).json();
+    expect(track.distanceM).toBe(0);
+    expect(track.trail).toHaveLength(1);
+    expect((await app.inject({ method: 'POST', url: `/api/requests/${req.id}/progress`, headers: h, payload: { status: 'arrived' } })).json().status).toBe('arrived');
+    // requester cannot cancel once the unit has arrived
+    expect((await app.inject({ method: 'POST', url: `/api/requests/${req.id}/cancel`, headers: w, payload: {} })).statusCode).toBe(200);
   });
 
-  it('rejects webhooks with a bad secret and unknown sources', async () => {
-    expect((await postDeepAlert({ alert_id: 'x' }, 'wrong')).statusCode).toBe(401);
-    const unknown = await app.inject({ method: 'POST', url: '/api/webhooks/nothing', payload: {} });
-    expect(unknown.statusCode).toBe(404);
+  it('lets a dispatcher see everything and assign manually; requester rates afterwards', async () => {
+    const ops = await login({ role: 'dispatcher', name: 'Ops', phone: '0210000000', dispatcherCode: 'ctrl' });
+    const o = bearer(ops.token);
+    const guard = await login({ role: 'responder', name: 'Guard', phone: '0834444444' });
+    const g = bearer(guard.token);
+    await app.inject({ method: 'PUT', url: '/api/responders/me', headers: g, payload: { service: 'security', unitName: 'SEC-2' } });
+    // online but no location yet -> never auto-offered
+    await app.inject({ method: 'POST', url: '/api/responders/me/status', headers: g, payload: { status: 'available' } });
+
+    const who = await login({ role: 'requester', name: 'Thandi', phone: '0821111111' });
+    const w = bearer(who.token);
+    const req = (await app.inject({ method: 'POST', url: '/api/requests', headers: w, payload: { service: 'security', ...CBD, flags: ['break_in'] } })).json();
+
+    const list = (await app.inject({ method: 'GET', url: '/api/requests?status=searching', headers: o })).json();
+    expect(list.map((r: { id: string }) => r.id)).toEqual([req.id]);
+    const units = (await app.inject({ method: 'GET', url: '/api/responders?service=security', headers: o })).json();
+    expect(units).toHaveLength(1);
+
+    const assigned = await app.inject({ method: 'POST', url: `/api/requests/${req.id}/assign`, headers: o, payload: { responderId: guard.user.id } });
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json().responderId).toBe(guard.user.id);
+
+    const detail = (await app.inject({ method: 'GET', url: `/api/requests/${req.id}`, headers: o })).json();
+    expect(detail.offers).toHaveLength(1);
+    expect(detail.offers[0].status).toBe('accepted');
+    expect(detail.events.map((e: { type: string }) => e.type)).toEqual(['created', 'no_units', 'assigned_manually']);
+
+    for (const status of ['en_route', 'arrived', 'completed']) {
+      expect((await app.inject({ method: 'POST', url: `/api/requests/${req.id}/progress`, headers: g, payload: { status } })).statusCode).toBe(200);
+    }
+    expect((await app.inject({ method: 'POST', url: `/api/requests/${req.id}/rate`, headers: w, payload: { rating: 4, comment: 'Thanks' } })).json().rating).toBe(4);
+    const stats = (await app.inject({ method: 'GET', url: '/api/stats', headers: o })).json();
+    expect(stats.requests24h).toBe(1);
+    expect(stats.respondersAvailable).toBe(1);
   });
 
-  it('ingests a DeepAlert webhook, auto-creating site and camera, idempotently', async () => {
-    const payload = {
-      alert_id: 'da-1',
-      site_id: 'S1',
-      site_name: 'Depot',
-      camera_id: 'C1',
-      camera_name: 'Yard',
-      event_type: 'person',
-      confidence: 0.97,
-      image_url: 'https://cdn/snap.jpg',
-    };
-    const first = await postDeepAlert(payload);
-    expect(first.statusCode).toBe(202);
-    expect(first.json()).toMatchObject({ accepted: 1, created: 1 });
+  it('streams only the events a user is allowed to see', async () => {
+    const who = await login({ role: 'requester', name: 'Thandi', phone: '0821111111' });
+    const other = await login({ role: 'requester', name: 'Other', phone: '0829999999' });
 
-    const second = await postDeepAlert(payload);
-    expect(second.json()).toMatchObject({ accepted: 1, created: 0 });
-
-    const alerts = (await app.inject({ method: 'GET', url: '/api/alerts?status=new', headers: op })).json();
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]).toMatchObject({ siteName: 'Depot', cameraName: 'Yard', status: 'new', severity: 'high' });
-
-    const sites = (await app.inject({ method: 'GET', url: '/api/sites', headers: op })).json();
-    expect(sites).toHaveLength(1);
-    expect(sites[0].externalRef).toBe('S1');
-  });
-
-  it('runs the full flow: alert -> acknowledge -> dispatch -> responder callback -> resolved', async () => {
-    const responder = await seedResponder();
-    await postDeepAlert({ alert_id: 'da-2', site_id: 'S1', site_name: 'Depot', event_type: 'intrusion', confidence: 0.9 });
-    const [alert] = (await app.inject({ method: 'GET', url: '/api/alerts', headers: op })).json();
-
-    const ack = await app.inject({ method: 'POST', url: `/api/alerts/${alert.id}/acknowledge`, headers: op });
-    expect(ack.statusCode).toBe(200);
-    expect(ack.json().status).toBe('acknowledged');
-    expect(ack.json().handledBy).toBe('alice');
-
-    // THE BUTTON
-    const dispatched = await app.inject({
-      method: 'POST',
-      url: `/api/alerts/${alert.id}/dispatch`,
-      headers: op,
-      payload: { responderId: responder.id, priority: 'critical', notes: 'Two males climbing fence' },
-    });
-    expect(dispatched.statusCode).toBe(201);
-    const dispatch = dispatched.json();
-    expect(dispatch).toMatchObject({ status: 'requested', priority: 'critical', requestedBy: 'alice', responderName: 'Alpha Armed Response' });
-    expect(dispatch.reference).toMatch(/^DSP-[A-Z2-9]{5}$/);
-
-    // alert is now dispatched and a second dispatch is refused
-    const alertAfter = (await app.inject({ method: 'GET', url: `/api/alerts/${alert.id}`, headers: op })).json();
-    expect(alertAfter.status).toBe('dispatched');
-    expect(alertAfter.dispatchId).toBe(dispatch.id);
-    const again = await app.inject({ method: 'POST', url: `/api/alerts/${alert.id}/dispatch`, headers: op, payload: { responderId: responder.id } });
-    expect(again.statusCode).toBe(409);
-
-    // responder was notified with a signed webhook
-    expect(fetchMock.calls).toHaveLength(1);
-    const call = fetchMock.calls[0];
-    expect(call.url).toBe('https://responder.example/hook');
-    const headers = call.init.headers as Record<string, string>;
-    const body = String(call.init.body);
-    expect(headers['x-dispatch-signature']).toBe(sign(SIGNING, body));
-    const sent = JSON.parse(body);
-    expect(sent.type).toBe('dispatch.requested');
-    expect(sent.site.name).toBe('Depot');
-    expect(sent.alert.eventType).toBe('intrusion');
-    expect(sent.dispatch.callbackUrl).toContain(`/api/dispatches/callback/${dispatch.reference}?token=`);
-
-    const detail = (await app.inject({ method: 'GET', url: `/api/dispatches/${dispatch.id}`, headers: op })).json();
-    expect(detail.deliveries).toHaveLength(1);
-    expect(detail.deliveries[0].success).toBe(true);
-    expect(detail.nextStatuses).toContain('acknowledged');
-
-    // responder uses the callback link (no operator key)
-    const cbUrl = new URL(sent.dispatch.callbackUrl);
-    const cb = await app.inject({
-      method: 'POST',
-      url: cbUrl.pathname + cbUrl.search,
-      payload: { status: 'en_route', actor: 'Vehicle 12', note: 'ETA 6 min' },
-    });
-    expect(cb.statusCode).toBe(200);
-    expect(cb.json().status).toBe('en_route');
-
-    const badToken = await app.inject({
-      method: 'POST',
-      url: `${cbUrl.pathname}?token=wrong`,
-      payload: { status: 'on_scene' },
-    });
-    expect(badToken.statusCode).toBe(404);
-
-    // operator closes it out; invalid transitions are refused
-    const back = await app.inject({ method: 'POST', url: `/api/dispatches/${dispatch.id}/status`, headers: op, payload: { status: 'requested' } });
-    expect(back.statusCode).toBe(409);
-    const resolved = await app.inject({ method: 'POST', url: `/api/dispatches/${dispatch.id}/status`, headers: op, payload: { status: 'resolved', note: 'Suspects fled' } });
-    expect(resolved.statusCode).toBe(200);
-    expect(resolved.json().closedAt).toBeTruthy();
-
-    const events = (await app.inject({ method: 'GET', url: `/api/dispatches/${dispatch.id}`, headers: op })).json().events;
-    expect(events.map((e: { toStatus: string }) => e.toStatus)).toEqual(['requested', 'en_route', 'resolved']);
-    expect(events[1].actor).toBe('responder:Vehicle 12');
-
-    const audit = (await app.inject({ method: 'GET', url: '/api/audit', headers: op })).json();
-    expect(audit.map((a: { action: string }) => a.action)).toEqual(
-      expect.arrayContaining(['alert.received', 'alert.acknowledged', 'dispatch.created', 'dispatch.en_route', 'dispatch.resolved']),
-    );
-  });
-
-  it('uses the site default responder and reopens the alert when a dispatch is cancelled', async () => {
-    const responder = await seedResponder('log');
-    await postDeepAlert({ alert_id: 'da-3', site_id: 'S9', site_name: 'Mall', event_type: 'loitering' });
-    const [site] = (await app.inject({ method: 'GET', url: '/api/sites', headers: op })).json();
-    await app.inject({ method: 'PATCH', url: `/api/sites/${site.id}`, headers: op, payload: { defaultResponderId: responder.id } });
-    const [alert] = (await app.inject({ method: 'GET', url: '/api/alerts', headers: op })).json();
-
-    const d = await app.inject({ method: 'POST', url: `/api/alerts/${alert.id}/dispatch`, headers: op, payload: {} });
-    expect(d.statusCode).toBe(201);
-    expect(d.json().responderId).toBe(responder.id);
-    expect(d.json().priority).toBe('high');
-    expect(fetchMock.calls).toHaveLength(0); // log channel does not call out
-
-    const cancelled = await app.inject({ method: 'POST', url: `/api/dispatches/${d.json().id}/status`, headers: op, payload: { status: 'cancelled', note: 'False alarm' } });
-    expect(cancelled.statusCode).toBe(200);
-    const alertAfter = (await app.inject({ method: 'GET', url: `/api/alerts/${alert.id}`, headers: op })).json();
-    expect(alertAfter.status).toBe('acknowledged');
-  });
-
-  it('refuses to dispatch when no responder can be resolved', async () => {
-    await postDeepAlert({ alert_id: 'da-4', event_type: 'vehicle' });
-    const [alert] = (await app.inject({ method: 'GET', url: '/api/alerts', headers: op })).json();
-    const d = await app.inject({ method: 'POST', url: `/api/alerts/${alert.id}/dispatch`, headers: op, payload: {} });
-    expect(d.statusCode).toBe(409);
-    expect(d.json().message).toMatch(/No responder/);
-  });
-
-  it('retries failed deliveries and records each attempt', async () => {
-    await app.close();
-    fetchMock = makeFetch(503);
-    app = await build(fetchMock.fetchImpl);
-    const responder = await seedResponder();
-    const site = (await app.inject({ method: 'POST', url: '/api/sites', headers: op, payload: { name: 'Plant' } })).json();
-    const d = await app.inject({
-      method: 'POST',
-      url: '/api/dispatches',
-      headers: op,
-      payload: { siteId: site.id, responderId: responder.id, priority: 'medium', reason: 'Suspicious vehicle at gate' },
-    });
-    expect(d.statusCode).toBe(201);
-    expect(fetchMock.calls).toHaveLength(3);
-    const detail = (await app.inject({ method: 'GET', url: `/api/dispatches/${d.json().id}`, headers: op })).json();
-    expect(detail.deliveries.map((x: { success: boolean }) => x.success)).toEqual([false, false, false]);
-    expect(detail.deliveries[0].detail).toMatch(/HTTP 503/);
-  });
-
-  it('accepts the generic alert format and validates it', async () => {
-    const ok = await app.inject({
-      method: 'POST',
-      url: '/api/webhooks/generic',
-      payload: { id: 'g1', eventType: 'person', confidence: 0.8, site: { name: 'Office' }, severity: 'critical' },
-    });
-    expect(ok.statusCode).toBe(202);
-    const bad = await app.inject({ method: 'POST', url: '/api/webhooks/generic', payload: { confidence: 3 } });
-    expect(bad.statusCode).toBe(400);
-    const [alert] = (await app.inject({ method: 'GET', url: '/api/alerts', headers: op })).json();
-    expect(alert.severity).toBe('critical');
-  });
-
-  it('streams SSE events', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/events', headers: op, payloadAsStream: true });
+    const res = await app.inject({ method: 'GET', url: `/api/events?token=${who.token}`, payloadAsStream: true });
     expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toBe('text/event-stream');
     const stream = res.stream();
-    const chunks: string[] = [];
-    const got = new Promise<void>((resolve) => {
+    let buf = '';
+    const gotMine = new Promise<void>((resolve) => {
       stream.on('data', (c: Buffer) => {
-        chunks.push(c.toString());
-        if (chunks.join('').includes('event: alert.created')) resolve();
+        buf += c.toString();
+        if (buf.includes('event: request.created')) resolve();
       });
     });
-    await postDeepAlert({ alert_id: 'sse-1', event_type: 'person' });
-    await got;
-    expect(chunks.join('')).toContain('event: hello');
+    // someone else's request must not appear
+    await app.inject({ method: 'POST', url: '/api/requests', headers: bearer(other.token), payload: { service: 'fire', ...CBD } });
+    await app.inject({ method: 'POST', url: '/api/requests', headers: bearer(who.token), payload: { service: 'security', ...CBD } });
+    await gotMine;
+    expect(buf).toContain('event: hello');
+    expect(buf.match(/event: request.created/g)).toHaveLength(1);
+    expect(buf).toContain('"service":"security"');
+    expect(buf).not.toContain('"service":"fire"');
     stream.destroy();
+  });
+});
+
+describe('empty JSON bodies', () => {
+  it('treats an empty application/json body as {}', async () => {
+    const app = await build();
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { role: 'requester', name: 'T', phone: '0821111111' } });
+    const token = login.json().token;
+    const created = await app.inject({ method: 'POST', url: '/api/requests', headers: { authorization: `Bearer ${token}` }, payload: { service: 'fire', ...CBD } });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/requests/${created.json().id}/cancel`,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      payload: '',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('cancelled');
+    await app.close();
   });
 });

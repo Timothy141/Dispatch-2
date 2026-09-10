@@ -2,7 +2,7 @@
   "name": "dispatch",
   "private": true,
   "version": "0.1.0",
-  "description": "CCTV dispatch application: receive verified alerts from DeepAlert and similar systems, let control-room operators dispatch responders with one click.",
+  "description": "On-demand emergency response: request security, medical or fire help with one tap; the nearest available unit accepts and is tracked live to your location.",
   "license": "Apache-2.0",
   "workspaces": [
     "server",
@@ -14,7 +14,6 @@
     "start": "npm run start --workspace=server",
     "test": "npm test --workspace=server",
     "typecheck": "npm run typecheck --workspaces",
-    "seed": "npm run seed --workspace=server",
     "simulate": "npm run simulate --workspace=server"
   },
   "engines": {
