@@ -56,6 +56,45 @@ export interface HelpRequest {
   cancelReason: string | null;
   rating: number | null;
   searchStartedAt: string;
+  source: 'app' | 'agent' | 'api';
+  createdBy: string | null;
+}
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  key?: string; // only on creation
+}
+
+export interface Webhook {
+  id: string;
+  name: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  createdAt: string;
+  secret?: string; // only on creation
+}
+
+export interface WebhookDelivery {
+  id: string;
+  eventType: string;
+  attempt: number;
+  success: boolean;
+  statusCode: number | null;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface GeocodeHit {
+  label: string;
+  lat: number;
+  lng: number;
 }
 
 export interface Offer {

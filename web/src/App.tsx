@@ -60,7 +60,7 @@ export default function App() {
         <div className="brand">
           <span className="brand-dot" /> DISPATCH
         </div>
-        <span className="hint">{role === 'requester' ? 'Get help' : role === 'responder' ? 'Responder' : 'Control room'}</span>
+        <span className="hint">{role === 'requester' ? 'Get help' : role === 'responder' ? 'Responder' : 'Agent / control room'}</span>
         {role === 'dispatcher' && stats && (
           <div className="stats">
             <div className="stat">
@@ -97,7 +97,7 @@ export default function App() {
       </header>
       {role === 'requester' && <RequesterScreen api={api} user={session.user} catalogue={catalogue} toast={toast} onConnection={setConnection} />}
       {role === 'responder' && <ResponderScreen api={api} user={session.user} catalogue={catalogue} toast={toast} onConnection={setConnection} />}
-      {role === 'dispatcher' && <DispatcherScreen api={api} toast={toast} onConnection={setConnection} onStats={setStats} />}
+      {role === 'dispatcher' && <DispatcherScreen api={api} catalogue={catalogue} toast={toast} onConnection={setConnection} onStats={setStats} />}
       <div className="toast-wrap" aria-live="polite">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.err ? 'err' : ''}`}>

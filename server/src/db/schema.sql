@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS requests (
   cancel_reason TEXT,
   rating        INTEGER,
   rating_comment TEXT,
-  search_started_at TEXT NOT NULL
+  search_started_at TEXT NOT NULL,
+  source        TEXT NOT NULL DEFAULT 'app',   -- app | agent | api
+  created_by    TEXT                           -- agent user id or api key id when not self-service
 );
 CREATE INDEX IF NOT EXISTS requests_status ON requests(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS requests_requester ON requests(requester_id, created_at DESC);
@@ -105,3 +107,39 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_log_created ON audit_log(created_at DESC);
+
+-- ---- integrations ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS api_keys (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  prefix       TEXT NOT NULL,             -- first 8 chars, shown in the UI
+  key_hash     TEXT NOT NULL UNIQUE,
+  scopes       TEXT NOT NULL DEFAULT '["requests:write","requests:read"]',
+  created_by   TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS webhooks (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  url          TEXT NOT NULL,
+  secret       TEXT NOT NULL,
+  events       TEXT NOT NULL DEFAULT '["*"]',
+  active       INTEGER NOT NULL DEFAULT 1,
+  created_by   TEXT NOT NULL,
+  created_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id           TEXT PRIMARY KEY,
+  webhook_id   TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+  event_type   TEXT NOT NULL,
+  attempt      INTEGER NOT NULL,
+  success      INTEGER NOT NULL,
+  status_code  INTEGER,
+  error        TEXT,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS webhook_deliveries_hook ON webhook_deliveries(webhook_id, created_at DESC);

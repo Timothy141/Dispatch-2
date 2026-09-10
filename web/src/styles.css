@@ -160,3 +160,28 @@ h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spa
   .dispatcher { grid-template-columns: 1fr; grid-template-rows: 45vh 1fr; } .dispatcher .col { border-right: 0; }
   .service-btn { padding: 12px 4px; font-size: 13px; } .service-btn .icon { font-size: 24px; }
 }
+
+/* modal + call-out */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+.modal-body { width: min(480px, 100%); max-height: 100%; overflow: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; display: grid; gap: 12px; }
+.modal-body.wide { width: min(1100px, 100%); }
+.callout-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.callout-form { display: grid; gap: 12px; align-content: start; }
+.callout-map { min-height: 420px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hits { display: grid; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-top: 4px; }
+.hit { text-align: left; padding: 8px 10px; background: var(--bg); border: 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.hit:hover { background: var(--panel-2); }
+@media (max-width: 860px) { .callout-grid { grid-template-columns: 1fr; } .callout-map { min-height: 260px; } .form-row { grid-template-columns: 1fr; } }
+
+/* integrations */
+.integrations { padding: 16px; display: grid; gap: 14px; max-width: 1100px; margin: 0 auto; overflow: auto; }
+.code { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font: 12px/1.5 var(--mono); overflow-x: auto; margin: 0; }
+.reveal { border-color: var(--amber); }
+.secret { display: block; background: var(--bg); padding: 10px; border-radius: 8px; word-break: break-all; }
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.table tr.dim { opacity: 0.5; }
+.table .small { font-size: 11px; }
+.view-tabs { display: flex; gap: 4px; }

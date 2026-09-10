@@ -18,6 +18,7 @@ export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path);
   const schema = readFileSync(join(here, 'schema.sql'), 'utf8');
   db.exec(schema);
+  migrate(db);
   return db;
 }
 
@@ -28,4 +29,11 @@ export function row<T>(r: unknown): T | undefined {
 }
 export function rows<T>(rs: unknown[]): T[] {
   return rs.map((r) => ({ ...(r as Record<string, unknown>) }) as T);
+}
+
+/** Additive migrations for databases created by earlier versions. */
+function migrate(db: DatabaseSyncType) {
+  const cols = new Set((db.prepare('PRAGMA table_info(requests)').all() as { name: string }[]).map((c) => c.name));
+  if (!cols.has('source')) db.exec("ALTER TABLE requests ADD COLUMN source TEXT NOT NULL DEFAULT 'app'");
+  if (!cols.has('created_by')) db.exec('ALTER TABLE requests ADD COLUMN created_by TEXT');
 }

@@ -1,0 +1,32 @@
+# Fly.io: `fly launch --no-deploy` (accept this file), then
+#   fly volumes create dispatch_data --size 1
+#   fly secrets set DISPATCHER_CODE=<pick-a-code>
+#   fly deploy
+app = "dispatch"            # change to a unique name
+primary_region = "jnb"      # Johannesburg; see `fly platform regions`
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATABASE_PATH = "/data/dispatch.db"
+  PUBLIC_BASE_URL = "https://dispatch.fly.dev"   # replace with your app URL
+  GEOCODER_USER_AGENT = "dispatch-app (you@example.com)"
+  LOG_LEVEL = "info"
+
+[[mounts]]
+  source = "dispatch_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # keep it running so responders receive jobs
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    method = "GET"
+    path = "/api/health"

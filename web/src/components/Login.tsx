@@ -9,7 +9,7 @@ interface Props {
 const ROLES: { role: Role; title: string; blurb: string; icon: string }[] = [
   { role: 'requester', title: 'I need help', blurb: 'Request security, medical or fire response to your location.', icon: '🆘' },
   { role: 'responder', title: "I'm a responder", blurb: 'Go online, receive nearby jobs, navigate and update progress.', icon: '🚨' },
-  { role: 'dispatcher', title: 'Control room', blurb: 'Live map of all units and incidents, manual assignment.', icon: '🎧' },
+  { role: 'dispatcher', title: 'Agent / control room', blurb: 'Log call-outs for callers, send them to a response officer, see every unit live.', icon: '🎧' },
 ];
 
 export function Login({ onLogin }: Props) {

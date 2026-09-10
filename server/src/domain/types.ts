@@ -1,6 +1,44 @@
 export const ROLES = ['requester', 'responder', 'dispatcher'] as const;
 export type Role = (typeof ROLES)[number];
 
+export const REQUEST_SOURCES = ['app', 'agent', 'api'] as const;
+export type RequestSource = (typeof REQUEST_SOURCES)[number];
+
+export const API_SCOPES = ['requests:write', 'requests:read', 'responders:read'] as const;
+export type ApiScope = (typeof API_SCOPES)[number];
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: ApiScope[];
+  createdBy: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface Webhook {
+  id: string;
+  name: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  webhookId: string;
+  eventType: string;
+  attempt: number;
+  success: boolean;
+  statusCode: number | null;
+  error: string | null;
+  createdAt: string;
+}
+
 export const SERVICES = ['security', 'medical', 'fire'] as const;
 export type Service = (typeof SERVICES)[number];
 
@@ -119,6 +157,8 @@ export interface Request {
   rating: number | null;
   ratingComment: string | null;
   searchStartedAt: string;
+  source: RequestSource;
+  createdBy: string | null;
 }
 
 export interface Offer {

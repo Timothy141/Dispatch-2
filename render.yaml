@@ -1,0 +1,23 @@
+# Render.com Blueprint: click "New +" -> "Blueprint" and point it at this repo.
+services:
+  - type: web
+    name: dispatch
+    runtime: docker
+    plan: starter            # needs a paid plan for the persistent disk below
+    region: frankfurt        # pick the region closest to your users
+    healthCheckPath: /api/health
+    disk:
+      name: dispatch-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_PATH
+        value: /data/dispatch.db
+      - key: DISPATCHER_CODE
+        generateValue: true  # Render generates a secret; copy it from the dashboard
+      - key: PUBLIC_BASE_URL
+        value: https://dispatch.onrender.com   # replace with your Render URL or custom domain
+      - key: GEOCODER_USER_AGENT
+        value: dispatch-app (you@example.com)
+      - key: LOG_LEVEL
+        value: info

@@ -1,5 +1,5 @@
 import { hashToken, newToken } from '../domain/ids.js';
-import type { Role, User } from '../domain/types.js';
+import type { ApiKey, ApiScope, Role, User } from '../domain/types.js';
 import { ForbiddenError } from './errors.js';
 import type { Repositories } from './repositories.js';
 
@@ -44,6 +44,32 @@ export class AuthService {
     const user = this.repo.getUserByTokenHash(hashToken(token));
     if (user) this.repo.touchUser(user.id);
     return user;
+  }
+
+  /**
+   * Find or create the account for a caller an agent is logging a call-out for,
+   * so the caller can sign in with their number later and track the unit.
+   */
+  resolveContact(name: string, phone: string): User {
+    const p = normalisePhone(phone);
+    const existing = this.repo.getUserByPhoneRole(p, 'requester');
+    if (existing) return existing;
+    return this.repo.createUser({ role: 'requester', name: name.trim() || 'Caller', phone: p, tokenHash: hashToken(newToken()) });
+  }
+
+  // ---- machine-to-machine API keys -----------------------------------------
+
+  createApiKey(createdBy: User, name: string, scopes: ApiScope[]): { apiKey: ApiKey; key: string } {
+    const key = `dsp_${newToken()}`;
+    const apiKey = this.repo.createApiKey({ name: name.trim(), prefix: key.slice(0, 12), keyHash: hashToken(key), scopes, createdBy: createdBy.id });
+    this.repo.audit({ actor: createdBy.id, action: 'apikey.created', entityType: 'api_key', entityId: apiKey.id, details: { name, scopes } });
+    return { apiKey, key };
+  }
+
+  authenticateApiKey(key: string): ApiKey | undefined {
+    const k = this.repo.getApiKeyByHash(hashToken(key));
+    if (k) this.repo.touchApiKey(k.id);
+    return k;
   }
 }
 

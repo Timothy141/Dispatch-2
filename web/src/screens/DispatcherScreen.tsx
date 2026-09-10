@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Api } from '../api';
+import { CalloutModal } from '../components/CalloutModal';
+import { IntegrationsPanel } from '../components/IntegrationsPanel';
 import { Map, type MapMarker } from '../components/Map';
 import { PriorityBadge, ServiceBadge, StatusBadge, Stepper, Timeline } from '../components/Common';
 import { ago, km, minutes, SERVICE_META } from '../format';
 import { useEvents } from '../hooks/useEvents';
 import { useNow } from '../hooks/useNow';
-import type { DetailView, HelpRequest, Responder, Stats } from '../types';
+import type { Catalogue, DetailView, HelpRequest, Responder, Stats } from '../types';
 
 interface Props {
   api: Api;
+  catalogue: Catalogue;
   toast: (m: string, err?: boolean) => void;
   onConnection: (s: string) => void;
   onStats: (s: Stats | null) => void;
@@ -18,7 +21,9 @@ type Tab = 'open' | 'closed';
 const TAB_STATUS: Record<Tab, string> = { open: 'searching,unfulfilled,assigned,en_route,arrived', closed: 'completed,cancelled' };
 const FALLBACK = { lat: -33.9249, lng: 18.4241 };
 
-export function DispatcherScreen({ api, toast, onConnection, onStats }: Props) {
+export function DispatcherScreen({ api, catalogue, toast, onConnection, onStats }: Props) {
+  const [view, setView] = useState<'live' | 'integrations'>('live');
+  const [calloutOpen, setCalloutOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('open');
   const [requests, setRequests] = useState<HelpRequest[]>([]);
   const [units, setUnits] = useState<Responder[]>([]);
@@ -102,10 +107,56 @@ export function DispatcherScreen({ api, toast, onConnection, onStats }: Props) {
   const candidates = sel ? units.filter((u) => u.service === sel.service && u.status !== 'busy') : [];
   const unitNames = useMemo(() => Object.fromEntries(units.map((u) => [u.userId, u.unitName])), [units]);
 
+  const mapCenter = sel ?? (markers[0] ? { lat: markers[0].lat, lng: markers[0].lng } : FALLBACK);
+
+  if (view === 'integrations') {
+    return (
+      <div style={{ overflow: 'auto', minHeight: 0 }}>
+        <div className="col-head" style={{ position: 'static' }}>
+          <div className="view-tabs">
+            <button className="tab" onClick={() => setView('live')}>
+              Live
+            </button>
+            <button className="tab active">Integrations</button>
+          </div>
+        </div>
+        <IntegrationsPanel api={api} toast={toast} />
+      </div>
+    );
+  }
+
   return (
     <div className="dispatcher">
+      {calloutOpen && (
+        <CalloutModal
+          api={api}
+          catalogue={catalogue}
+          units={units}
+          center={mapCenter}
+          onClose={() => setCalloutOpen(false)}
+          onCreated={(r) => {
+            setCalloutOpen(false);
+            toast(`Call-out ${r.reference} ${r.status === 'assigned' ? 'sent to officer' : 'created, matching…'}`);
+            setTab('open');
+            setSelectedId(r.id);
+            refresh();
+          }}
+        />
+      )}
       <section className="col">
         <div className="col-head">
+          <button className="btn small primary" onClick={() => setCalloutOpen(true)}>
+            + New call-out
+          </button>
+          <span className="spacer" />
+          <div className="view-tabs">
+            <button className="tab active">Live</button>
+            <button className="tab" onClick={() => setView('integrations')}>
+              Integrations
+            </button>
+          </div>
+        </div>
+        <div className="col-head" style={{ top: 41 }}>
           Requests <span className="count">{requests.length}</span>
           <div className="tabs">
             {(['open', 'closed'] as Tab[]).map((t) => (
@@ -127,6 +178,7 @@ export function DispatcherScreen({ api, toast, onConnection, onStats }: Props) {
             </div>
             <div className="sub">
               {r.requesterName} · {r.address ?? `${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}`} · {ago(r.createdAt, now)} ago
+              {r.source !== 'app' && <span className="badge status" style={{ marginLeft: 6 }}>{r.source === 'agent' ? 'call-out' : 'via API'}</span>}
             </div>
             <div className="sub">
               {r.responderId ? `${unitNames[r.responderId] ?? 'unit'} · ETA ${minutes(r.etaSeconds)}` : r.status === 'searching' ? 'Searching for a unit…' : ''}
@@ -154,7 +206,7 @@ export function DispatcherScreen({ api, toast, onConnection, onStats }: Props) {
         ))}
       </section>
 
-      <Map center={sel ?? (markers[0] ? { lat: markers[0].lat, lng: markers[0].lng } : FALLBACK)} zoom={12} markers={markers} trail={detail?.trail ?? []} fit={!sel && markers.length > 0} />
+      <Map center={mapCenter} zoom={12} markers={markers} trail={detail?.trail ?? []} fit={!sel && markers.length > 0} />
 
       {sel && (
         <aside className="col">

@@ -25,6 +25,17 @@ export interface CreateRequestInput {
   flags?: string[];
 }
 
+/** A call-out created by an agent (phone call, radio, alarm signal) or by an integrated system. */
+export interface CalloutInput extends CreateRequestInput {
+  contactName: string;
+  contactPhone: string;
+  /** Send straight to this response officer instead of automatic matching. */
+  responderId?: string | null;
+  source: 'agent' | 'api';
+  /** Agent user id or API key id. */
+  createdBy: string;
+}
+
 export type MatchingConfig = Pick<
   Config,
   'OFFER_TIMEOUT_SECONDS' | 'OFFER_FANOUT' | 'MAX_RADIUS_KM' | 'SEARCH_TIMEOUT_SECONDS' | 'LOCATION_STALE_SECONDS' | 'AVERAGE_SPEED_KMH'
@@ -70,6 +81,49 @@ export class DispatchService {
     this.repo.addEvent({ requestId: request.id, type: 'created', actor: requester.id, note: request.description });
     this.repo.audit({ actor: requester.id, action: 'request.created', entityType: 'request', entityId: request.id, details: { service: request.service, priority: request.priority } });
     this.publishRequest('request.created', request);
+    this.search(request.id);
+    return this.repo.getRequest(request.id)!;
+  }
+
+  /**
+   * Manual call-out: an agent (or an integrated system) logs an incident on
+   * behalf of a caller and either sends it to a specific response officer or
+   * lets matching find one. The caller gets a requester account keyed on their
+   * phone number so they can open the app and track the unit.
+   */
+  createCallout(input: CalloutInput, resolveContact: (name: string, phone: string) => User): Request {
+    const contact = resolveContact(input.contactName, input.contactPhone);
+    const flags = (input.flags ?? []).slice(0, 10);
+    const request = this.repo.insertRequest({
+      id: newId(),
+      reference: newReference(input.service),
+      requesterId: contact.id,
+      service: input.service,
+      priority: priorityFor(input.service, flags),
+      lat: input.lat,
+      lng: input.lng,
+      address: input.address?.trim() || null,
+      description: input.description?.trim() || null,
+      flags,
+      source: input.source,
+      createdBy: input.createdBy,
+    });
+    this.repo.addEvent({ requestId: request.id, type: 'created', actor: input.createdBy, note: `${input.source === 'agent' ? 'Manual call-out' : 'Integration call-out'} for ${contact.name}${request.description ? ` – ${request.description}` : ''}` });
+    this.repo.audit({ actor: input.createdBy, action: 'request.callout', entityType: 'request', entityId: request.id, details: { service: request.service, source: input.source, responderId: input.responderId ?? null } });
+    this.publishRequest('request.created', request);
+    if (input.responderId) {
+      const responder = this.mustGetResponder(input.responderId);
+      if (responder.service !== request.service) throw new ConflictError(`${responder.unitName} is a ${responder.service} unit`);
+      if (responder.status === 'busy') throw new ConflictError(`${responder.unitName} already has an active job`);
+      const distanceM = responder.lat != null && responder.lng != null ? Math.round(haversineM({ lat: responder.lat, lng: responder.lng }, request)) : 0;
+      const eta = etaSeconds(distanceM, this.cfg.AVERAGE_SPEED_KMH);
+      const offer = this.repo.insertOffer({ requestId: request.id, responderId: responder.userId, distanceM, etaSeconds: eta, expiresAt: nowIso() });
+      this.repo.setOfferStatus(offer.id, 'accepted');
+      if (responder.status === 'offline') this.repo.setResponderStatus(responder.userId, 'available');
+      // The officer sees it as an assigned job immediately (offer.created lets their app ring too).
+      this.bus.publish('offer.created', { offer: this.repo.getOffer(offer.id), request }, { responderIds: [responder.userId] });
+      return this.assign(request, this.repo.getResponder(responder.userId)!, eta, input.createdBy, 'sent_to_officer');
+    }
     this.search(request.id);
     return this.repo.getRequest(request.id)!;
   }

@@ -23,6 +23,18 @@ room sees every unit and incident and can step in when nobody accepts.
 
 ## Features
 
+- **Agent call-outs**: a control-room agent logs an incident phoned or radioed
+  in (caller name and number, address search or map pin, situation flags,
+  notes) and either sends it straight to a chosen response officer, whose
+  app rings immediately, or lets matching find the nearest unit. The caller
+  can sign in with the same number and track the unit.
+- **Cloud-ready**: one Docker image, health check, proxy-aware, persistent
+  SQLite volume; one-click blueprint for Render (`render.yaml`) and config
+  for Fly.io (`fly.toml`). Installable on phones as a PWA.
+- **Integrations**: API keys for other systems to create and read call-outs
+  (`/api/v1/...`), signed outgoing webhooks for every event, OpenAPI document
+  and hosted API docs at `/api/docs`. Managed from the app's Integrations tab.
+
 - **One-tap request** with quick situation flags (e.g. *Unconscious*, *Suspects
   armed*, *People trapped*) that set the priority automatically. GPS location,
   or tap the map to place the pin.
@@ -49,6 +61,12 @@ room sees every unit and incident and can step in when nobody accepts.
   rating.
 - Single Node process, SQLite (built-in `node:sqlite`, no native build),
   Docker image, GitHub Actions CI.
+
+## Going live
+
+New to shipping apps? Read **[docs/GOING-LIVE.md](docs/GOING-LIVE.md)**: a
+step-by-step path from this repository to a hosted app with a domain, real
+users, and integrations, written for a first-time app owner.
 
 ## Quick start
 
@@ -88,6 +106,16 @@ docker compose up --build
 Set `DISPATCHER_CODE` and `PUBLIC_BASE_URL` in the environment. Data lives in
 the `dispatch-data` volume.
 
+### Cloud hosting
+
+- **Render**: New → Blueprint → this repo; `render.yaml` defines the service
+  and a persistent disk at `/data`.
+- **Fly.io**: `fly launch --no-deploy`, create the `dispatch_data` volume,
+  set `DISPATCHER_CODE`, `fly deploy` (see `fly.toml`).
+- Any other Docker host (Cloud Run, Railway, a VPS) works: run the image with
+  `DATABASE_PATH` on a persistent volume and `PUBLIC_BASE_URL` set to the
+  public https address. `TRUST_PROXY=true` is the default.
+
 ## How matching works
 
 Configured through `.env` (defaults in brackets):
@@ -125,9 +153,42 @@ per (number, role). Dispatchers must also supply `DISPATCHER_CODE`.
 > `POST /api/auth/login` before exposing this publicly. The token model stays
 > the same.
 
+## Integrating other cloud apps
+
+Open **Agent / control room → Integrations** in the app.
+
+**Incoming (they create call-outs here).** Create an API key and give it to
+the other system. It calls:
+
+```http
+POST https://<your-host>/api/v1/callouts
+x-api-key: dsp_...
+Content-Type: application/json
+
+{ "service": "security", "contactName": "Mrs Naidoo", "contactPhone": "+27821234567",
+  "lat": -33.9249, "lng": 18.4241, "address": "12 Long St", "flags": ["in_progress"],
+  "responderId": null }
+```
+
+`responderId: null` runs automatic matching; set it (from
+`GET /api/v1/responders`) to send to a specific officer. Also
+`GET /api/v1/callouts?status=`, `GET /api/v1/callouts/:id`,
+`POST /api/v1/callouts/:id/cancel`. Scopes: `requests:write`,
+`requests:read`, `responders:read`. Reference and try-it page:
+`https://<your-host>/api/docs` (OpenAPI at `/api/openapi.json`).
+
+**Outgoing (they learn what happened).** Add a webhook URL and pick events
+(`*`, `request.*`, `offer.created`, `responder.location`, …). Each event is
+POSTed as `{ id, type, at, data }` with headers `x-dispatch-event`,
+`x-dispatch-delivery` and `x-dispatch-signature: sha256=<HMAC-SHA256 of the
+raw body with the webhook secret>`, retried on failure. Deliveries are
+listed in the app. Zapier / Make "catch webhook" triggers work directly, so
+SMS, email, WhatsApp or spreadsheet automations need no code.
+
 ## API
 
-All endpoints except login and the catalogue require
+All endpoints except login, the catalogue and the `/api/v1` machine
+endpoints (which use `x-api-key`) require
 `Authorization: Bearer <token>` (or `?token=` for the SSE stream).
 
 | Method | Path | Role | Purpose |
@@ -149,6 +210,12 @@ All endpoints except login and the catalogue require
 | GET | `/api/requests?status=` · `/api/responders` | dispatcher | lists |
 | GET | `/api/requests/:id` | dispatcher (+ owner/unit) | detail with offers and timeline |
 | POST | `/api/requests/:id/assign` · `/retry` | dispatcher | `{ responderId }` / restart search |
+| POST | `/api/callouts` | dispatcher | manual call-out `{ service, contactName, contactPhone, lat, lng, address?, description?, flags?, responderId? }` |
+| GET | `/api/geocode?q=` | any signed-in | address search (server-side proxy to a Nominatim geocoder) |
+| GET/POST/DELETE | `/api/integrations/keys` | dispatcher | API keys (plaintext shown once) |
+| GET/POST/PATCH/DELETE | `/api/integrations/webhooks` (+ `/:id/deliveries`, `/:id/test`) | dispatcher | outgoing webhooks |
+| POST/GET | `/api/v1/callouts`, `/api/v1/callouts/:id`, `/api/v1/callouts/:id/cancel`, `/api/v1/responders` | API key | machine endpoints |
+| GET | `/api/openapi.json` · `/api/docs` | – | OpenAPI document and hosted docs |
 | GET | `/api/stats` · `/api/audit` | dispatcher | counters, audit log |
 | GET | `/api/events` | any | SSE: `request.*`, `offer.*`, `responder.*`, filtered per user |
 
@@ -160,14 +227,18 @@ server/src
   config.ts                    environment → typed config
   db/schema.sql, db.ts         SQLite schema and connection
   domain/                      types + flags, geo maths, request state machine, ids
-  services/dispatchService.ts  matching engine and request/offer/job lifecycle
+  services/dispatchService.ts  matching engine, call-outs, request/offer/job lifecycle
+  services/webhookService.ts   signed outgoing webhooks with retries
   services/authService.ts      phone sign-in, bearer tokens
   services/repositories.ts     SQL access
-  routes/                      auth, requester, responder, dispatcher, SSE
+  routes/                      auth, requester, responder, dispatcher, call-outs, integrations, SSE
+  openapi.json                 integration API reference (served at /api/openapi.json)
 server/test                    vitest: geo, state machine, matching scenarios, HTTP flows
 server/scripts/simulate.ts     demo fleet that accepts and drives to jobs
 web/src/screens                RequesterScreen, ResponderScreen, DispatcherScreen
-web/src/components             Leaflet map wrapper, login, shared UI
+web/src/components             Leaflet map, login, call-out modal, integrations panel, shared UI
+docs/GOING-LIVE.md             step-by-step launch guide
+render.yaml, fly.toml          cloud deployment
 ```
 
 ```bash

@@ -1,4 +1,4 @@
-import type { Catalogue, DetailView, HelpRequest, LatLng, Offer, Responder, Role, Service, Stats, TrackView, User } from './types';
+import type { ApiKey, Catalogue, DetailView, GeocodeHit, HelpRequest, LatLng, Offer, Responder, Role, Service, Stats, TrackView, User, Webhook, WebhookDelivery } from './types';
 
 export interface Session {
   token: string;
@@ -84,6 +84,20 @@ export function createApi(token: string) {
     assign: (id: string, responderId: string) => c<HelpRequest>('POST', `/api/requests/${id}/assign`, { responderId }),
     retry: (id: string) => c<HelpRequest>('POST', `/api/requests/${id}/retry`),
     stats: () => c<Stats>('GET', '/api/stats'),
+    // agent tooling
+    geocode: (q: string) => c<GeocodeHit[]>('GET', `/api/geocode?q=${encodeURIComponent(q)}`),
+    createCallout: (body: { service: Service; contactName: string; contactPhone: string; lat: number; lng: number; address?: string; description?: string; flags?: string[]; responderId?: string | null }) =>
+      c<HelpRequest>('POST', '/api/callouts', body),
+    // integrations
+    apiKeys: () => c<ApiKey[]>('GET', '/api/integrations/keys'),
+    createApiKey: (name: string, scopes: string[]) => c<ApiKey>('POST', '/api/integrations/keys', { name, scopes }),
+    revokeApiKey: (id: string) => c<{ ok: true }>('DELETE', `/api/integrations/keys/${id}`),
+    webhooks: () => c<Webhook[]>('GET', '/api/integrations/webhooks'),
+    createWebhook: (body: { name: string; url: string; events: string[] }) => c<Webhook>('POST', '/api/integrations/webhooks', body),
+    updateWebhook: (id: string, body: Partial<{ active: boolean; events: string[]; url: string; name: string }>) => c<Webhook>('PATCH', `/api/integrations/webhooks/${id}`, body),
+    deleteWebhook: (id: string) => c<{ ok: true }>('DELETE', `/api/integrations/webhooks/${id}`),
+    webhookDeliveries: (id: string) => c<WebhookDelivery[]>('GET', `/api/integrations/webhooks/${id}/deliveries`),
+    testWebhook: (id: string) => c<{ delivered: boolean }>('POST', `/api/integrations/webhooks/${id}/test`),
     eventsUrl: () => `/api/events?token=${encodeURIComponent(token)}`,
   };
 }

@@ -9,7 +9,9 @@ import { loadConfig, type Config } from './config.js';
 import { openDatabase, type Db } from './db/db.js';
 import { InvalidTransitionError } from './domain/requestStateMachine.js';
 import { authRoutes } from './routes/authRoutes.js';
+import { calloutRoutes } from './routes/calloutRoutes.js';
 import { dispatcherRoutes } from './routes/dispatcherRoutes.js';
+import { integrationRoutes } from './routes/integrationRoutes.js';
 import { eventRoutes } from './routes/eventRoutes.js';
 import { requestRoutes } from './routes/requestRoutes.js';
 import { responderRoutes } from './routes/responderRoutes.js';
@@ -18,6 +20,7 @@ import { DispatchService } from './services/dispatchService.js';
 import { ConflictError, ForbiddenError, NotFoundError } from './services/errors.js';
 import { EventBus } from './services/eventBus.js';
 import { Repositories } from './services/repositories.js';
+import { WebhookService } from './services/webhookService.js';
 
 export interface AppContext {
   config: Config;
@@ -26,6 +29,7 @@ export interface AppContext {
   bus: EventBus;
   auth: AuthService;
   dispatch: DispatchService;
+  webhooks: WebhookService;
 }
 
 export interface BuildOptions {
@@ -34,6 +38,10 @@ export interface BuildOptions {
   logger?: boolean | object;
   /** Run the matching tick automatically (default true; tests drive tick() manually). */
   autoTick?: boolean;
+  /** Injected fetch for outgoing webhooks (tests). */
+  fetchImpl?: typeof fetch;
+  /** Await webhook deliveries (tests). */
+  awaitWebhooks?: boolean;
 }
 
 export function buildContext(opts: BuildOptions = {}, log: FastifyInstance['log'] | Console = console): AppContext {
@@ -43,12 +51,24 @@ export function buildContext(opts: BuildOptions = {}, log: FastifyInstance['log'
   const bus = new EventBus();
   const auth = new AuthService(repo, config.DISPATCHER_CODE);
   const dispatch = new DispatchService(repo, bus, config, log as never);
-  return { config, db, repo, bus, auth, dispatch };
+  const webhooks = new WebhookService(
+    repo,
+    bus,
+    { timeoutMs: config.WEBHOOK_TIMEOUT_MS, maxAttempts: config.WEBHOOK_MAX_ATTEMPTS, fetchImpl: opts.fetchImpl, awaitDelivery: opts.awaitWebhooks },
+    log as never,
+  );
+  webhooks.start();
+  return { config, db, repo, bus, auth, dispatch, webhooks };
 }
 
 export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance & { ctx: AppContext }> {
-  const app = Fastify({ logger: opts.logger ?? { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 1024 * 1024 });
-  const ctx = buildContext(opts, app.log);
+  const config = { ...loadConfig(opts.env ?? process.env), ...opts.config } as Config;
+  const app = Fastify({
+    logger: opts.logger ?? { level: config.LOG_LEVEL },
+    bodyLimit: 1024 * 1024,
+    trustProxy: config.TRUST_PROXY,
+  });
+  const ctx = buildContext({ ...opts, config }, app.log);
 
   await app.register(cors, { origin: true, credentials: true });
   // Accept JSON POSTs with an empty body (e.g. /accept, /retry) as `{}`.
@@ -84,6 +104,8 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await requestRoutes(app, ctx);
   await responderRoutes(app, ctx);
   await dispatcherRoutes(app, ctx);
+  await calloutRoutes(app, ctx);
+  await integrationRoutes(app, ctx);
   await eventRoutes(app, ctx);
 
   const webDist = ctx.config.WEB_DIST || resolve(process.cwd(), '../web/dist');
@@ -108,6 +130,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   }
   app.addHook('onClose', async () => {
     if (ticker) clearInterval(ticker);
+    ctx.webhooks.close();
     ctx.db.close();
   });
   return Object.assign(app, { ctx }) as FastifyInstance & { ctx: AppContext };

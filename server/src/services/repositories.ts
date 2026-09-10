@@ -2,8 +2,13 @@ import type { Db } from '../db/db.js';
 import { row, rows } from '../db/db.js';
 import { newId, nowIso } from '../domain/ids.js';
 import type {
+  ApiKey,
+  ApiScope,
   Offer,
   Request,
+  RequestSource,
+  Webhook,
+  WebhookDelivery,
   RequestEvent,
   RequestStatus,
   Responder,
@@ -80,6 +85,40 @@ export const mapRequest = (r: Row): Request => ({
   rating: num(r.rating),
   ratingComment: str(r.rating_comment),
   searchStartedAt: String(r.search_started_at),
+  source: (str(r.source) ?? 'app') as RequestSource,
+  createdBy: str(r.created_by),
+});
+
+export const mapApiKey = (r: Row): ApiKey => ({
+  id: String(r.id),
+  name: String(r.name),
+  prefix: String(r.prefix),
+  scopes: json<ApiScope[]>(r.scopes, []),
+  createdBy: String(r.created_by),
+  createdAt: String(r.created_at),
+  lastUsedAt: str(r.last_used_at),
+  revokedAt: str(r.revoked_at),
+});
+
+export const mapWebhook = (r: Row): Webhook => ({
+  id: String(r.id),
+  name: String(r.name),
+  url: String(r.url),
+  events: json<string[]>(r.events, ['*']),
+  active: r.active === 1,
+  createdBy: String(r.created_by),
+  createdAt: String(r.created_at),
+});
+
+export const mapDelivery = (r: Row): WebhookDelivery => ({
+  id: String(r.id),
+  webhookId: String(r.webhook_id),
+  eventType: String(r.event_type),
+  attempt: Number(r.attempt),
+  success: r.success === 1,
+  statusCode: num(r.status_code),
+  error: str(r.error),
+  createdAt: String(r.created_at),
 });
 
 export const mapOffer = (r: Row): Offer => ({
@@ -233,14 +272,16 @@ export class Repositories {
     address: string | null;
     description: string | null;
     flags: string[];
+    source?: RequestSource;
+    createdBy?: string | null;
   }): Request {
     const t = nowIso();
     this.db
       .prepare(
-        `INSERT INTO requests (id, reference, requester_id, service, priority, lat, lng, address, description, flags, status, created_at, updated_at, search_started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'searching', ?, ?, ?)`,
+        `INSERT INTO requests (id, reference, requester_id, service, priority, lat, lng, address, description, flags, status, created_at, updated_at, search_started_at, source, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'searching', ?, ?, ?, ?, ?)`,
       )
-      .run(q.id, q.reference, q.requesterId, q.service, q.priority, q.lat, q.lng, q.address, q.description, JSON.stringify(q.flags), t, t, t);
+      .run(q.id, q.reference, q.requesterId, q.service, q.priority, q.lat, q.lng, q.address, q.description, JSON.stringify(q.flags), t, t, t, q.source ?? 'app', q.createdBy ?? null);
     return this.getRequest(q.id)!;
   }
   /** Generic patch of mutable request columns. */
@@ -345,6 +386,65 @@ export class Repositories {
   }
   listExpiredPendingOffers(nowIsoStr: string): Offer[] {
     return rows<Row>(this.db.prepare("SELECT * FROM offers WHERE status = 'pending' AND expires_at <= ?").all(nowIsoStr)).map(mapOffer);
+  }
+
+  // ---- api keys ----------------------------------------------------------
+  listApiKeys(): ApiKey[] {
+    return rows<Row>(this.db.prepare('SELECT * FROM api_keys ORDER BY created_at DESC').all()).map(mapApiKey);
+  }
+  getApiKeyByHash(hash: string): ApiKey | undefined {
+    const r = row<Row>(this.db.prepare('SELECT * FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL').get(hash));
+    return r && mapApiKey(r);
+  }
+  createApiKey(k: { name: string; prefix: string; keyHash: string; scopes: ApiScope[]; createdBy: string }): ApiKey {
+    const id = newId();
+    this.db
+      .prepare('INSERT INTO api_keys (id, name, prefix, key_hash, scopes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, k.name, k.prefix, k.keyHash, JSON.stringify(k.scopes), k.createdBy, nowIso());
+    return mapApiKey(row<Row>(this.db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id))!);
+  }
+  touchApiKey(id: string) {
+    this.db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(nowIso(), id);
+  }
+  revokeApiKey(id: string): boolean {
+    return this.db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(nowIso(), id).changes > 0;
+  }
+
+  // ---- webhooks ----------------------------------------------------------
+  listWebhooks(activeOnly = false): Webhook[] {
+    const sql = activeOnly ? 'SELECT * FROM webhooks WHERE active = 1 ORDER BY created_at' : 'SELECT * FROM webhooks ORDER BY created_at';
+    return rows<Row>(this.db.prepare(sql).all()).map(mapWebhook);
+  }
+  getWebhook(id: string): (Webhook & { secret: string }) | undefined {
+    const r = row<Row>(this.db.prepare('SELECT * FROM webhooks WHERE id = ?').get(id));
+    return r && { ...mapWebhook(r), secret: String(r.secret) };
+  }
+  createWebhook(w: { name: string; url: string; secret: string; events: string[]; createdBy: string }): Webhook {
+    const id = newId();
+    this.db
+      .prepare('INSERT INTO webhooks (id, name, url, secret, events, active, created_by, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)')
+      .run(id, w.name, w.url, w.secret, JSON.stringify(w.events), w.createdBy, nowIso());
+    return this.getWebhook(id)!;
+  }
+  updateWebhook(id: string, patch: Partial<{ name: string; url: string; events: string[]; active: boolean }>): Webhook | undefined {
+    const cur = this.getWebhook(id);
+    if (!cur) return undefined;
+    const next = { ...cur, ...patch };
+    this.db
+      .prepare('UPDATE webhooks SET name = ?, url = ?, events = ?, active = ? WHERE id = ?')
+      .run(next.name, next.url, JSON.stringify(next.events), next.active ? 1 : 0, id);
+    return this.getWebhook(id);
+  }
+  deleteWebhook(id: string): boolean {
+    return this.db.prepare('DELETE FROM webhooks WHERE id = ?').run(id).changes > 0;
+  }
+  addWebhookDelivery(d: { webhookId: string; eventType: string; attempt: number; success: boolean; statusCode: number | null; error: string | null }) {
+    this.db
+      .prepare('INSERT INTO webhook_deliveries (id, webhook_id, event_type, attempt, success, status_code, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(newId(), d.webhookId, d.eventType, d.attempt, d.success ? 1 : 0, d.statusCode, d.error, nowIso());
+  }
+  listWebhookDeliveries(webhookId: string, limit = 50): WebhookDelivery[] {
+    return rows<Row>(this.db.prepare('SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT ?').all(webhookId, limit)).map(mapDelivery);
   }
 
   // ---- audit / stats -----------------------------------------------------
