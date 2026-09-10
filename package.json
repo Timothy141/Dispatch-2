@@ -1,0 +1,22 @@
+{
+  "name": "dispatch",
+  "private": true,
+  "version": "0.1.0",
+  "description": "On-demand emergency response: request security, medical or fire help with one tap; the nearest available unit accepts and is tracked live to your location.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=server & npm run dev --workspace=web & wait",
+    "build": "npm run build --workspace=web && npm run build --workspace=server",
+    "start": "npm run start --workspace=server",
+    "test": "npm test --workspace=server",
+    "typecheck": "npm run typecheck --workspaces",
+    "simulate": "npm run simulate --workspace=server"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

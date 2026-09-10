@@ -1,0 +1,116 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Dispatch integration API",
+    "version": "1.0.0",
+    "description": "Create and track security, medical and fire call-outs from other systems. Authenticate with an API key created by a dispatcher in the app (Integrations tab) sent as the `x-api-key` header. Register a webhook to be notified of every change; deliveries are signed with HMAC-SHA256 in `x-dispatch-signature`."
+  },
+  "servers": [{ "url": "http://localhost:8080" }],
+  "security": [{ "ApiKey": [] }],
+  "tags": [{ "name": "Callouts" }, { "name": "Responders" }, { "name": "Webhooks (outgoing)" }],
+  "paths": {
+    "/api/v1/callouts": {
+      "post": {
+        "tags": ["Callouts"],
+        "summary": "Create a call-out",
+        "description": "Logs an incident for a contact. Omit `responderId` to let the app match the nearest available unit; set it to send the job straight to a specific response officer. Requires scope `requests:write`.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CalloutInput" } } } },
+        "responses": { "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Request" } } } }, "400": { "description": "Validation error" }, "401": { "description": "Missing or invalid API key" }, "409": { "description": "Responder unavailable or wrong service" } }
+      },
+      "get": {
+        "tags": ["Callouts"],
+        "summary": "List call-outs",
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated: searching,assigned,en_route,arrived,completed,cancelled,unfulfilled" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "maximum": 500 } }
+        ],
+        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Request" } } } } } }
+      }
+    },
+    "/api/v1/callouts/{id}": {
+      "get": {
+        "tags": ["Callouts"],
+        "summary": "Get a call-out with its assigned unit and timeline",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "OK" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/api/v1/callouts/{id}/cancel": {
+      "post": {
+        "tags": ["Callouts"],
+        "summary": "Cancel a call-out",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "reason": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Cancelled" }, "409": { "description": "Cannot cancel in current status" } }
+      }
+    },
+    "/api/v1/responders": {
+      "get": {
+        "tags": ["Responders"],
+        "summary": "List response units (status and last position)",
+        "description": "Requires scope `responders:read`.",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "x-webhooks": {
+      "post": {
+        "tags": ["Webhooks (outgoing)"],
+        "summary": "Event delivered to your webhook URL",
+        "description": "Register a URL in the app under Integrations → Webhooks (or POST /api/integrations/webhooks as a dispatcher). Each event is POSTed as JSON with headers `x-dispatch-event`, `x-dispatch-delivery` and `x-dispatch-signature: sha256=<hex HMAC-SHA256 of the raw body using your webhook secret>`. Retried 3 times on failure. Event types: `request.created`, `request.updated`, `offer.created`, `offer.updated`, `responder.updated`, `responder.location` (must be subscribed explicitly), `ping`.",
+        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookEvent" } } } },
+        "responses": { "2xx": { "description": "Acknowledge with any 2xx status" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": { "ApiKey": { "type": "apiKey", "in": "header", "name": "x-api-key" } },
+    "schemas": {
+      "CalloutInput": {
+        "type": "object",
+        "required": ["service", "contactName", "contactPhone", "lat", "lng"],
+        "properties": {
+          "service": { "type": "string", "enum": ["security", "medical", "fire"] },
+          "contactName": { "type": "string" },
+          "contactPhone": { "type": "string", "example": "+27821234567" },
+          "lat": { "type": "number" },
+          "lng": { "type": "number" },
+          "address": { "type": "string" },
+          "description": { "type": "string" },
+          "flags": { "type": "array", "items": { "type": "string" }, "description": "Situation flags, e.g. armed, unconscious, people_trapped. See GET /api/catalogue." },
+          "responderId": { "type": "string", "description": "Send directly to this unit (from GET /api/v1/responders)." }
+        }
+      },
+      "Request": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "reference": { "type": "string", "example": "MED-7KQ2M" },
+          "service": { "type": "string" },
+          "priority": { "type": "string", "enum": ["standard", "urgent", "critical"] },
+          "status": { "type": "string", "enum": ["searching", "assigned", "en_route", "arrived", "completed", "cancelled", "unfulfilled"] },
+          "source": { "type": "string", "enum": ["app", "agent", "api"] },
+          "lat": { "type": "number" },
+          "lng": { "type": "number" },
+          "address": { "type": "string", "nullable": true },
+          "description": { "type": "string", "nullable": true },
+          "flags": { "type": "array", "items": { "type": "string" } },
+          "responderId": { "type": "string", "nullable": true },
+          "etaSeconds": { "type": "integer", "nullable": true },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "assignedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "arrivedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "completedAt": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "WebhookEvent": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "example": "request.updated" },
+          "at": { "type": "string", "format": "date-time" },
+          "data": { "type": "object" }
+        }
+      }
+    }
+  }
+}

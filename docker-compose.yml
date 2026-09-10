@@ -1,0 +1,18 @@
+services:
+  dispatch:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      OPERATOR_API_KEY: ${OPERATOR_API_KEY:-change-me-operator-key}
+      WEBHOOK_SECRET_DEEPALERT: ${WEBHOOK_SECRET_DEEPALERT:-change-me-deepalert-secret}
+      WEBHOOK_SECRET_GENERIC: ${WEBHOOK_SECRET_GENERIC:-}
+      DISPATCH_SIGNING_SECRET: ${DISPATCH_SIGNING_SECRET:-change-me-dispatch-signing-secret}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - dispatch-data:/data
+    restart: unless-stopped
+
+volumes:
+  dispatch-data:
