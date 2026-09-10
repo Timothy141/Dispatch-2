@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { publicApi, type Session } from '../api';
-import type { Role } from '../types';
+import type { Catalogue, Role } from '../types';
 
 interface Props {
+  catalogue: Catalogue;
   onLogin: (s: Session) => void;
+  onPrivacy: () => void;
 }
 
 const ROLES: { role: Role; title: string; blurb: string; icon: string }[] = [
@@ -12,20 +14,37 @@ const ROLES: { role: Role; title: string; blurb: string; icon: string }[] = [
   { role: 'dispatcher', title: 'Agent / control room', blurb: 'Log call-outs for callers, send them to a response officer, see every unit live.', icon: '🎧' },
 ];
 
-export function Login({ onLogin }: Props) {
+export function Login({ catalogue, onLogin, onPrivacy }: Props) {
   const [role, setRole] = useState<Role | null>(null);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const otpRequired = catalogue.auth.otpRequired;
 
-  const submit = async () => {
-    if (!role) return;
+  const sendCode = async () => {
     setBusy(true);
     setError(null);
     try {
-      const r = await publicApi.login({ role, name: name.trim(), phone: phone.trim(), dispatcherCode: code || undefined });
+      const r = await publicApi.requestOtp(phone.trim());
+      setOtpSent(r.phone);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!role) return;
+    if (otpRequired && !otpSent) return sendCode();
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await publicApi.login({ role, name: name.trim(), phone: phone.trim(), dispatcherCode: code || undefined, code: otpRequired ? otp.trim() : undefined });
       onLogin({ token: r.token, user: r.user });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -78,17 +97,36 @@ export function Login({ onLogin }: Props) {
               <input id="l-code" type="password" value={code} onChange={(e) => setCode(e.target.value)} />
             </div>
           )}
+          {otpRequired && otpSent && (
+            <div className="field">
+              <label htmlFor="l-otp">Code we sent to {otpSent}</label>
+              <input id="l-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value)} placeholder="6-digit code" autoFocus />
+              <div className="hint">
+                Did not get it?{' '}
+                <button type="button" className="btn small ghost" disabled={busy} onClick={sendCode}>
+                  Send again
+                </button>
+              </div>
+            </div>
+          )}
           {error && <div className="error">{error}</div>}
           <div className="actions">
-            <button type="submit" className="btn primary big" disabled={busy || !name.trim() || phone.trim().length < 6}>
-              {busy ? 'Signing in…' : 'Continue'}
+            <button type="submit" className="btn primary big" disabled={busy || !name.trim() || phone.trim().length < 6 || (otpRequired && !!otpSent && otp.trim().length < 6)}>
+              {busy ? 'Please wait…' : otpRequired && !otpSent ? 'Send code' : 'Continue'}
             </button>
-            <button type="button" className="btn ghost" onClick={() => setRole(null)}>
+            <button type="button" className="btn ghost" onClick={() => { setRole(null); setOtpSent(null); setOtp(''); }}>
               Back
             </button>
           </div>
         </form>
       )}
+      <div className="hint">
+        By continuing you agree to the{' '}
+        <a href="#/privacy" onClick={(e) => { e.preventDefault(); onPrivacy(); }}>
+          privacy notice
+        </a>
+        . In a life-threatening emergency also call your national emergency number.
+      </div>
     </div>
   );
 }

@@ -9,6 +9,12 @@ export interface LoginInput {
   phone: string;
   /** Required for dispatcher when DISPATCHER_CODE is configured. */
   dispatcherCode?: string;
+  /** SMS one-time code; required when OTP_REQUIRED is on. */
+  code?: string;
+}
+
+export interface OtpVerifier {
+  verify(phone: string, code: string): boolean;
 }
 
 /**
@@ -20,6 +26,7 @@ export class AuthService {
   constructor(
     private readonly repo: Repositories,
     private readonly dispatcherCode: string,
+    private readonly otp?: { required: boolean; verifier: OtpVerifier },
   ) {}
 
   login(input: LoginInput): { user: User; token: string } {
@@ -27,6 +34,9 @@ export class AuthService {
       throw new ForbiddenError('Invalid dispatcher code');
     }
     const phone = normalisePhone(input.phone);
+    if (this.otp?.required) {
+      if (!input.code || !this.otp.verifier.verify(phone, input.code)) throw new ForbiddenError('Invalid or expired code');
+    }
     const token = newToken();
     const tokenHash = hashToken(token);
     const existing = this.repo.getUserByPhoneRole(phone, input.role);

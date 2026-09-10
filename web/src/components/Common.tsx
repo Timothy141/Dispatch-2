@@ -43,7 +43,7 @@ export function Timeline({ events, names }: { events: RequestEvent[]; names?: Re
         <li key={e.id}>
           <span className="t">{clock(e.createdAt)}</span>
           <span>
-            <b>{label(e.type)}</b> · {names?.[e.actor] ?? (e.actor === 'system' ? 'system' : e.actor.slice(0, 8))}
+            <b>{label(e.type)}</b> · {e.actorName ?? names?.[e.actor] ?? (e.actor === 'system' ? 'system' : e.actor.startsWith('apikey:') ? 'integration' : e.actor.slice(0, 8))}
             {e.note && <div className="note">{e.note}</div>}
           </span>
         </li>

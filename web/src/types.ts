@@ -112,6 +112,7 @@ export interface RequestEvent {
   id: string;
   type: string;
   actor: string;
+  actorName: string | null;
   note: string | null;
   createdAt: string;
 }
@@ -152,6 +153,8 @@ export interface Catalogue {
   services: Service[];
   flags: Record<Service, { key: string; label: string; priority?: Priority }[]>;
   matching: { offerTimeoutSeconds: number; searchTimeoutSeconds: number; maxRadiusKm: number };
+  auth: { otpRequired: boolean };
+  push: { vapidPublicKey: string | null };
 }
 
 export interface Stats {

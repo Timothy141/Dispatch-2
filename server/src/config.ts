@@ -32,6 +32,33 @@ const EnvSchema = z.object({
   /** Outgoing webhook delivery. */
   WEBHOOK_TIMEOUT_MS: z.coerce.number().positive().default(8000),
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+
+  /** Require an SMS one-time code at sign-in. Turn on for any public deployment. */
+  OTP_REQUIRED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  /** log (prints the code to the server log) | twilio | http (generic JSON gateway). */
+  SMS_PROVIDER: z.enum(['log', 'twilio', 'http']).default('log'),
+  TWILIO_ACCOUNT_SID: z.string().default(''),
+  TWILIO_AUTH_TOKEN: z.string().default(''),
+  TWILIO_FROM: z.string().default(''),
+  SMS_HTTP_URL: z.string().default(''),
+  /** JSON object of extra headers, e.g. {"Authorization":"Bearer x"} */
+  SMS_HTTP_HEADERS: z.string().default('{}'),
+  /** JSON body template; {to} and {text} are replaced. */
+  SMS_HTTP_BODY: z.string().default('{"to":"{to}","message":"{text}"}'),
+
+  /** Web Push (generate once with: npx web-push generate-vapid-keys). Empty = push disabled. */
+  VAPID_PUBLIC_KEY: z.string().default(''),
+  VAPID_PRIVATE_KEY: z.string().default(''),
+  VAPID_SUBJECT: z.string().default('mailto:ops@example.com'),
+
+  /** Automatic SQLite backups. 0 disables. */
+  BACKUP_INTERVAL_HOURS: z.coerce.number().min(0).default(24),
+  BACKUP_DIR: z.string().default(''),
+  BACKUP_KEEP: z.coerce.number().int().min(1).default(14),
 });
 
 export type Config = z.infer<typeof EnvSchema>;

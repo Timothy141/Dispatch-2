@@ -55,6 +55,13 @@ room sees every unit and incident and can step in when nobody accepts.
   incident, request list with status steppers, request detail with offer
   history and timeline, manual assignment to any free unit, retry search,
   cancel. Header shows waiting/active counts and average accept/arrival times.
+- **Sign-in security**: optional SMS one-time code (`OTP_REQUIRED=true`) via
+  Twilio or any JSON SMS gateway, rate-limited, single-use, 5 attempts.
+- **Push notifications**: responders' phones ring a new offer even with the
+  app in the background; requesters are told when a unit accepts or arrives
+  (Web Push, configured with VAPID keys).
+- **Automatic backups**: consistent copies of the database every 24 hours,
+  pruned to the newest 14, plus a manual backup endpoint for dispatchers.
 - **Privacy by role**: requesters only see their own requests; responders only
   see jobs offered to or held by them; the event stream is filtered per user.
 - **Audit trail** of every request, offer, acceptance, status change and
@@ -149,9 +156,26 @@ control room; matching order is by distance.
 Sign-in is by mobile number and name and issues a bearer token; one account
 per (number, role). Dispatchers must also supply `DISPATCHER_CODE`.
 
-> Production note: put an SMS one-time-code step in front of
-> `POST /api/auth/login` before exposing this publicly. The token model stays
-> the same.
+Set `OTP_REQUIRED=true` for any public deployment: the app then texts a
+6-digit code (`POST /api/auth/otp/request`) that must accompany the login.
+Choose the SMS provider with `SMS_PROVIDER`:
+
+- `log`: the code is printed in the server log (development).
+- `twilio`: set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`.
+- `http`: any gateway that accepts a JSON POST; set `SMS_HTTP_URL`,
+  `SMS_HTTP_HEADERS`, `SMS_HTTP_BODY` (with `{to}` and `{text}`).
+
+## Push notifications and backups
+
+Generate keys once with `npx web-push generate-vapid-keys` and set
+`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`. Responders and
+requesters then see an "Enable notifications" button. Without keys the
+feature is hidden and the live in-app updates still work.
+
+Backups run every `BACKUP_INTERVAL_HOURS` into `BACKUP_DIR` (default: a
+`backups` folder next to the database), keeping the newest `BACKUP_KEEP`.
+Dispatchers can list and trigger them at `/api/admin/backups`. Copy that
+folder off the server periodically (or rely on your host's disk snapshots).
 
 ## Integrating other cloud apps
 
@@ -193,7 +217,10 @@ endpoints (which use `x-api-key`) require
 
 | Method | Path | Role | Purpose |
 |--------|------|------|---------|
-| POST | `/api/auth/login` | – | `{ role, name, phone, dispatcherCode? }` → `{ token, user }` |
+| POST | `/api/auth/otp/request` | – | `{ phone }` texts a one-time code (rate limited) |
+| POST | `/api/auth/login` | – | `{ role, name, phone, dispatcherCode?, code? }` → `{ token, user }` |
+| POST/DELETE | `/api/push/subscriptions` | any | register / remove this browser for push |
+| GET/POST | `/api/admin/backups` | dispatcher | list / take a database backup |
 | GET | `/api/catalogue` | – | services, quick flags, matching parameters |
 | GET | `/api/auth/me` | any | current user (+ responder profile) |
 | POST | `/api/requests` | requester | `{ service, lat, lng, address?, description?, flags? }` |
@@ -229,6 +256,10 @@ server/src
   domain/                      types + flags, geo maths, request state machine, ids
   services/dispatchService.ts  matching engine, call-outs, request/offer/job lifecycle
   services/webhookService.ts   signed outgoing webhooks with retries
+  services/otpService.ts, smsService.ts   SMS one-time codes and providers
+  services/pushService.ts      Web Push to responders and requesters
+  services/backupService.ts    scheduled SQLite backups
+  rateLimit.ts                 in-memory limiter for sign-in endpoints
   services/authService.ts      phone sign-in, bearer tokens
   services/repositories.ts     SQL access
   routes/                      auth, requester, responder, dispatcher, call-outs, integrations, SSE
@@ -251,8 +282,6 @@ Maps use OpenStreetMap tiles; the browser needs internet access to
 
 ## Roadmap / not yet included
 
-- SMS one-time-code verification and push notifications for responders when
-  the app is in the background.
 - Payments / subscriptions for paid response.
 - Turn-by-turn routing and road-based ETAs (currently straight-line estimate).
 - Organisation admin: manage units, shifts and coverage areas.

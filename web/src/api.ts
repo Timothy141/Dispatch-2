@@ -52,7 +52,8 @@ async function call<T>(method: string, url: string, token: string | null, body?:
 }
 
 export const publicApi = {
-  login: (body: { role: Role; name: string; phone: string; dispatcherCode?: string }) =>
+  requestOtp: (phone: string) => call<{ sent: boolean; phone: string; expiresAt: string; provider: string }>('POST', '/api/auth/otp/request', null, { phone }),
+  login: (body: { role: Role; name: string; phone: string; dispatcherCode?: string; code?: string }) =>
     call<{ user: User; token: string; responder: Responder | null }>('POST', '/api/auth/login', null, body),
   catalogue: () => call<Catalogue>('GET', '/api/catalogue', null),
 };
@@ -98,6 +99,10 @@ export function createApi(token: string) {
     deleteWebhook: (id: string) => c<{ ok: true }>('DELETE', `/api/integrations/webhooks/${id}`),
     webhookDeliveries: (id: string) => c<WebhookDelivery[]>('GET', `/api/integrations/webhooks/${id}/deliveries`),
     testWebhook: (id: string) => c<{ delivered: boolean }>('POST', `/api/integrations/webhooks/${id}/test`),
+    pushSubscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) => c<{ ok: true }>('POST', '/api/push/subscriptions', sub),
+    pushUnsubscribe: (endpoint: string) => c<{ ok: true }>('DELETE', '/api/push/subscriptions', { endpoint }),
+    backups: () => c<{ enabled: boolean; dir: string; backups: { file: string; bytes: number; at: string }[] }>('GET', '/api/admin/backups'),
+    runBackup: () => c<{ file: string; bytes: number }>('POST', '/api/admin/backups'),
     eventsUrl: () => `/api/events?token=${encodeURIComponent(token)}`,
   };
 }

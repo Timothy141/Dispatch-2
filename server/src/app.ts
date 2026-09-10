@@ -16,7 +16,11 @@ import { eventRoutes } from './routes/eventRoutes.js';
 import { requestRoutes } from './routes/requestRoutes.js';
 import { responderRoutes } from './routes/responderRoutes.js';
 import { AuthService } from './services/authService.js';
+import { BackupService } from './services/backupService.js';
 import { DispatchService } from './services/dispatchService.js';
+import { OtpService } from './services/otpService.js';
+import { PushService, type PushSender } from './services/pushService.js';
+import { createSmsProvider, type SmsProvider } from './services/smsService.js';
 import { ConflictError, ForbiddenError, NotFoundError } from './services/errors.js';
 import { EventBus } from './services/eventBus.js';
 import { Repositories } from './services/repositories.js';
@@ -30,6 +34,10 @@ export interface AppContext {
   auth: AuthService;
   dispatch: DispatchService;
   webhooks: WebhookService;
+  sms: SmsProvider;
+  otp: OtpService;
+  push: PushService;
+  backups: BackupService;
 }
 
 export interface BuildOptions {
@@ -42,6 +50,9 @@ export interface BuildOptions {
   fetchImpl?: typeof fetch;
   /** Await webhook deliveries (tests). */
   awaitWebhooks?: boolean;
+  /** Test doubles. */
+  smsProvider?: SmsProvider;
+  pushSender?: PushSender;
 }
 
 export function buildContext(opts: BuildOptions = {}, log: FastifyInstance['log'] | Console = console): AppContext {
@@ -49,8 +60,14 @@ export function buildContext(opts: BuildOptions = {}, log: FastifyInstance['log'
   const db = openDatabase(config.DATABASE_PATH);
   const repo = new Repositories(db);
   const bus = new EventBus();
-  const auth = new AuthService(repo, config.DISPATCHER_CODE);
+  const sms = opts.smsProvider ?? createSmsProvider(config, log as never, opts.fetchImpl);
+  const otp = new OtpService(repo, sms, { ttlSeconds: config.OTP_TTL_SECONDS });
+  const auth = new AuthService(repo, config.DISPATCHER_CODE, { required: config.OTP_REQUIRED, verifier: otp });
   const dispatch = new DispatchService(repo, bus, config, log as never);
+  const push = new PushService(repo, bus, { publicKey: config.VAPID_PUBLIC_KEY, privateKey: config.VAPID_PRIVATE_KEY, subject: config.VAPID_SUBJECT }, log as never, opts.pushSender);
+  push.start();
+  const backups = new BackupService(db, { dbPath: config.DATABASE_PATH, dir: config.BACKUP_DIR, intervalHours: config.BACKUP_INTERVAL_HOURS, keep: config.BACKUP_KEEP }, log as never);
+  backups.start();
   const webhooks = new WebhookService(
     repo,
     bus,
@@ -58,7 +75,7 @@ export function buildContext(opts: BuildOptions = {}, log: FastifyInstance['log'
     log as never,
   );
   webhooks.start();
-  return { config, db, repo, bus, auth, dispatch, webhooks };
+  return { config, db, repo, bus, auth, dispatch, webhooks, sms, otp, push, backups };
 }
 
 export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance & { ctx: AppContext }> {
@@ -131,6 +148,8 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   app.addHook('onClose', async () => {
     if (ticker) clearInterval(ticker);
     ctx.webhooks.close();
+    ctx.push.close();
+    ctx.backups.stop();
     ctx.db.close();
   });
   return Object.assign(app, { ctx }) as FastifyInstance & { ctx: AppContext };

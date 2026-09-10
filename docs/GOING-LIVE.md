@@ -128,30 +128,38 @@ touching the code.
 
 ---
 
-## 6. Make it robust before scaling  — first weeks
+## 6. Switch on the safety features  — 1 hour
 
-In rough priority order. Each is a well-scoped change you can ask a developer
-(or an AI assistant with this repo) to make.
+These are built in; they only need accounts and settings. Set the environment
+variables on your host (Render: service → Environment; Fly: `fly secrets set`).
 
-1. **SMS one-time code at sign-in.** Today anyone who knows a phone number can
-   sign in as that number. Add an OTP step using a provider such as Twilio,
-   Clickatell or BulkSMS. The token model does not change.
-2. **Push notifications for responders.** Browsers only receive the live
-   offers while the tab is open. Add Web Push (VAPID) so an officer's phone
-   rings the offer even when the screen is locked. Fallback: SMS the offer
-   through a webhook → SMS gateway (already possible: Integrations → Webhooks
-   on `offer.created`).
-3. **Backups.** Render disks and Fly volumes take daily snapshots, but also
-   schedule a nightly copy of `/data/dispatch.db` to object storage
-   (Backblaze B2 / S3). If you outgrow one machine, move to Postgres.
+1. **SMS one-time code at sign-in** (so nobody can sign in as someone else's
+   number). Create a Twilio account (twilio.com), buy a number, then set:
+   ```
+   OTP_REQUIRED=true
+   SMS_PROVIDER=twilio
+   TWILIO_ACCOUNT_SID=AC...   TWILIO_AUTH_TOKEN=...   TWILIO_FROM=+27...
+   ```
+   Any other SMS gateway with a JSON API works via `SMS_PROVIDER=http`
+   (see `.env.example`). Test with `SMS_PROVIDER=log` first: the code appears
+   in the server log.
+2. **Push notifications** (officers' phones ring an offer even with the
+   screen locked). On your computer run `npx web-push generate-vapid-keys`
+   once and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and
+   `VAPID_SUBJECT=mailto:you@yourbrand.co.za`. Users then get an
+   "Enable notifications" button. iPhones need the app added to the home
+   screen first (iOS 16.4+).
+3. **Backups** already run daily into `/data/backups` (keeps 14). Once a
+   month download one from the host's shell, or ask a developer to add an
+   upload to object storage. Fly and Render also snapshot the disk.
 4. **Monitoring and alerts.** Free tiers of Better Stack / UptimeRobot ping
-   `/api/health` every minute and text you if it is down. Turn on the host's
-   log retention.
-5. **Coverage rules.** Restrict which organisations' units can be offered
-   which clients (contracts), add coverage areas, shifts, and vehicle types.
-6. **Legal basics.** Terms of use, privacy notice (you store names, numbers
-   and locations: POPIA applies in South Africa), and an incident data
-   retention period.
+   `/api/health` every minute and text you if it is down.
+5. **Privacy notice.** The app ships a template at `/#/privacy`
+   (`web/src/components/Privacy.tsx`). Fill in the [bracketed] items and have
+   it reviewed: POPIA applies to the names, numbers and locations you store.
+
+Later, when you have paying customers: coverage rules (which organisations'
+units serve which clients), shifts and vehicle types, reporting exports.
 
 ---
 

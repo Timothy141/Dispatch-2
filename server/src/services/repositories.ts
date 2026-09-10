@@ -5,6 +5,7 @@ import type {
   ApiKey,
   ApiScope,
   Offer,
+  PushSubscriptionRecord,
   Request,
   RequestSource,
   Webhook,
@@ -138,6 +139,7 @@ export const mapEvent = (r: Row): RequestEvent => ({
   requestId: String(r.request_id),
   type: String(r.type),
   actor: String(r.actor),
+  actorName: str(r.actor_name),
   note: str(r.note),
   createdAt: String(r.created_at),
 });
@@ -335,7 +337,17 @@ export class Repositories {
     return mapEvent(row<Row>(this.db.prepare('SELECT * FROM request_events WHERE id = ?').get(id))!);
   }
   listEvents(requestId: string): RequestEvent[] {
-    return rows<Row>(this.db.prepare('SELECT * FROM request_events WHERE request_id = ? ORDER BY created_at').all(requestId)).map(mapEvent);
+    return rows<Row>(
+      this.db
+        .prepare(
+          `SELECT e.*, COALESCE(r.unit_name, u.name) AS actor_name
+           FROM request_events e
+           LEFT JOIN users u ON u.id = e.actor
+           LEFT JOIN responders r ON r.user_id = e.actor
+           WHERE e.request_id = ? ORDER BY e.created_at`,
+        )
+        .all(requestId),
+    ).map(mapEvent);
   }
   addLocationPoint(requestId: string, responderId: string, lat: number, lng: number) {
     this.db
@@ -445,6 +457,51 @@ export class Repositories {
   }
   listWebhookDeliveries(webhookId: string, limit = 50): WebhookDelivery[] {
     return rows<Row>(this.db.prepare('SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY created_at DESC LIMIT ?').all(webhookId, limit)).map(mapDelivery);
+  }
+
+  // ---- one-time codes ----------------------------------------------------
+  getOtp(phone: string): { codeHash: string; expiresAt: string; attempts: number } | undefined {
+    const r = row<Row>(this.db.prepare('SELECT * FROM otp_codes WHERE phone = ?').get(phone));
+    return r && { codeHash: String(r.code_hash), expiresAt: String(r.expires_at), attempts: Number(r.attempts) };
+  }
+  upsertOtp(phone: string, codeHash: string, expiresAt: string) {
+    this.db
+      .prepare(
+        `INSERT INTO otp_codes (phone, code_hash, expires_at, attempts, created_at) VALUES (?, ?, ?, 0, ?)
+         ON CONFLICT(phone) DO UPDATE SET code_hash = excluded.code_hash, expires_at = excluded.expires_at, attempts = 0, created_at = excluded.created_at`,
+      )
+      .run(phone, codeHash, expiresAt, nowIso());
+  }
+  bumpOtpAttempts(phone: string) {
+    this.db.prepare('UPDATE otp_codes SET attempts = attempts + 1 WHERE phone = ?').run(phone);
+  }
+  deleteOtp(phone: string) {
+    this.db.prepare('DELETE FROM otp_codes WHERE phone = ?').run(phone);
+  }
+
+  // ---- push subscriptions ------------------------------------------------
+  listPushSubscriptions(userId: string): PushSubscriptionRecord[] {
+    return rows<Row>(this.db.prepare('SELECT * FROM push_subscriptions WHERE user_id = ?').all(userId)).map((r) => ({
+      id: String(r.id),
+      userId: String(r.user_id),
+      endpoint: String(r.endpoint),
+      keys: { p256dh: String(r.p256dh), auth: String(r.auth) },
+      createdAt: String(r.created_at),
+    }));
+  }
+  upsertPushSubscription(userId: string, endpoint: string, p256dh: string, auth: string) {
+    this.db
+      .prepare(
+        `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+      )
+      .run(newId(), userId, endpoint, p256dh, auth, nowIso());
+  }
+  deletePushSubscription(endpoint: string) {
+    this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+  }
+  countPushSubscriptions(userId: string): number {
+    return Number((row<Row>(this.db.prepare('SELECT COUNT(*) AS c FROM push_subscriptions WHERE user_id = ?').get(userId)) ?? { c: 0 }).c);
   }
 
   // ---- audit / stats -----------------------------------------------------

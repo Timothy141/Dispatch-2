@@ -178,7 +178,16 @@ export interface RequestEvent {
   requestId: string;
   type: string;
   actor: string;
+  actorName: string | null;
   note: string | null;
+  createdAt: string;
+}
+
+export interface PushSubscriptionRecord {
+  id: string;
+  userId: string;
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
   createdAt: string;
 }
 

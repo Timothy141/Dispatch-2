@@ -32,6 +32,15 @@ export async function dispatcherRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post<{ Params: { id: string } }>('/api/requests/:id/retry', guard, async (req) => ctx.dispatch.retrySearch(req.user!, req.params.id));
 
   app.get('/api/stats', guard, async () => ctx.repo.stats());
+
+  // Backups of the database (also taken automatically every BACKUP_INTERVAL_HOURS).
+  app.get('/api/admin/backups', guard, async () => ({ enabled: ctx.backups.enabled, dir: ctx.backups.dir, backups: ctx.backups.list() }));
+  app.post('/api/admin/backups', guard, async (req, reply) => {
+    if (!ctx.backups.enabled) return reply.code(409).send({ error: 'backups_disabled', message: 'Backups are disabled for in-memory databases or when BACKUP_INTERVAL_HOURS=0' });
+    const r = ctx.backups.run();
+    ctx.repo.audit({ actor: req.user!.id, action: 'backup.created', entityType: 'backup', entityId: r.file });
+    return r;
+  });
   app.get('/api/audit', guard, async (req) => {
     const limit = Number((req.query as Record<string, string>).limit ?? 200);
     return ctx.repo.listAudit(Number.isFinite(limit) ? Math.min(limit, 1000) : 200);

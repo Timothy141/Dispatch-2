@@ -6,6 +6,7 @@ import { ago, km, label, mapsLink, minutes, SERVICE_META } from '../format';
 import { useEvents } from '../hooks/useEvents';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { useNow } from '../hooks/useNow';
+import { enablePush, hasPushSubscription, pushSupported } from '../push';
 import type { Catalogue, HelpRequest, LatLng, Offer, Responder, Service, User } from '../types';
 
 interface Props {
@@ -27,6 +28,11 @@ export function ResponderScreen({ api, user, catalogue, toast, onConnection }: P
   const geo = useGeolocation(responder?.status !== 'offline');
   const now = useNow();
   const lastSent = useRef<string>('');
+  const [pushState, setPushState] = useState<'unknown' | 'on' | 'off' | 'unsupported'>('unknown');
+  useEffect(() => {
+    if (!catalogue.push.vapidPublicKey || !pushSupported()) return setPushState('unsupported');
+    hasPushSubscription().then((on) => setPushState(on ? 'on' : 'off'));
+  }, [catalogue.push.vapidPublicKey]);
 
   // profile form
   const [service, setService] = useState<Service>('security');
@@ -178,6 +184,18 @@ export function ResponderScreen({ api, user, catalogue, toast, onConnection }: P
           </div>
           <button className={`switch ${online ? 'on' : ''}`} onClick={toggleOnline} disabled={busy || responder.status === 'busy'} aria-label="Toggle online" />
         </div>
+        {pushState === 'off' && (
+          <button
+            className="btn block"
+            onClick={async () => {
+              const r = await enablePush(api, catalogue.push.vapidPublicKey!);
+              setPushState(r === 'enabled' ? 'on' : 'off');
+              toast(r === 'enabled' ? 'You will be notified of new jobs even when the app is closed' : r === 'denied' ? 'Notifications were blocked in your browser settings' : 'Notifications not supported here', r !== 'enabled');
+            }}
+          >
+            🔔 Enable job notifications
+          </button>
+        )}
         <div className="hint">
           {manualPos ? (
             <>

@@ -6,6 +6,7 @@ import { ago, clock, km, mapsLink, minutes, SERVICE_META, STATUS_TEXT } from '..
 import { useEvents } from '../hooks/useEvents';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { useNow } from '../hooks/useNow';
+import { enablePush, hasPushSubscription, pushSupported } from '../push';
 import type { Catalogue, HelpRequest, LatLng, Service, TrackView, User } from '../types';
 
 interface Props {
@@ -33,6 +34,11 @@ export function RequesterScreen({ api, user, catalogue, toast, onConnection }: P
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const now = useNow();
+  const [pushState, setPushState] = useState<'unknown' | 'on' | 'off' | 'unsupported'>('unknown');
+  useEffect(() => {
+    if (!catalogue.push.vapidPublicKey || !pushSupported()) return setPushState('unsupported');
+    hasPushSubscription().then((on) => setPushState(on ? 'on' : 'off'));
+  }, [catalogue.push.vapidPublicKey]);
 
   const myPos: LatLng = pin ?? geo.position ?? FALLBACK;
 
@@ -283,6 +289,18 @@ export function RequesterScreen({ api, user, catalogue, toast, onConnection }: P
                 </div>
               )}
 
+              {pushState === 'off' && OPEN.has(req.status) && (
+                <button
+                  className="btn block"
+                  onClick={async () => {
+                    const r = await enablePush(api, catalogue.push.vapidPublicKey!);
+                    setPushState(r === 'enabled' ? 'on' : 'off');
+                    toast(r === 'enabled' ? 'We will notify you when the unit accepts and arrives' : 'Notifications not enabled', r !== 'enabled');
+                  }}
+                >
+                  🔔 Notify me when the unit accepts and arrives
+                </button>
+              )}
               {(OPEN.has(req.status) || req.status === 'unfulfilled') && (
                 <div className="actions">
                   <button className="btn danger" onClick={cancel} disabled={req.status === 'arrived'}>

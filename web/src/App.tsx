@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError, createApi, loadSession, publicApi, saveSession, type Session } from './api';
 import { Login } from './components/Login';
+import { Privacy } from './components/Privacy';
 import { minutes } from './format';
+import { registerServiceWorker } from './push';
 import { DispatcherScreen } from './screens/DispatcherScreen';
 import { RequesterScreen } from './screens/RequesterScreen';
 import { ResponderScreen } from './screens/ResponderScreen';
@@ -19,7 +21,15 @@ export default function App() {
   const [connection, setConnection] = useState('connecting');
   const [stats, setStats] = useState<Stats | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [showPrivacy, setShowPrivacy] = useState(window.location.hash === '#/privacy');
   const api = useMemo(() => (session ? createApi(session.token) : null), [session]);
+
+  useEffect(() => {
+    registerServiceWorker();
+    const onHash = () => setShowPrivacy(window.location.hash === '#/privacy');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const toast = useCallback((msg: string, err = false) => {
     const id = Date.now() + Math.random();
@@ -50,8 +60,9 @@ export default function App() {
     setStats(null);
   };
 
-  if (!session || !api) return <Login onLogin={login} />;
   if (!catalogue) return <div className="empty">Loading…</div>;
+  if (showPrivacy) return <Privacy onBack={() => { setShowPrivacy(false); window.location.hash = ''; }} />;
+  if (!session || !api) return <Login catalogue={catalogue} onLogin={login} onPrivacy={() => setShowPrivacy(true)} />;
 
   const role = session.user.role;
   return (
