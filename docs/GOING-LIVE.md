@@ -158,8 +158,20 @@ variables on your host (Render: service → Environment; Fly: `fly secrets set`)
    (`web/src/components/Privacy.tsx`). Fill in the [bracketed] items and have
    it reviewed: POPIA applies to the names, numbers and locations you store.
 
-Later, when you have paying customers: coverage rules (which organisations'
-units serve which clients), shifts and vehicle types, reporting exports.
+6. **Organisations and coverage.** In **Admin**, add each response company
+   with its coverage circle and hand them their join code. Officers enter the
+   code when they set up their unit. Deactivate units that leave.
+7. **Reports.** **Reports** gives response times by service and unit for any
+   period, and a CSV download for clients and insurers.
+8. **Road-based ETAs** (optional). Set `ROUTER_URL` to an OSRM-compatible
+   router. The public `https://router.project-osrm.org` is fine to try but not
+   for production; a developer can run OSRM for your region on a small server.
+9. **Off-site backups** (optional, recommended). Create a bucket on Backblaze
+   B2, Cloudflare R2 or AWS S3 and set the `S3_*` variables; every backup is
+   then also uploaded there. **Admin → Backups** shows the last upload.
+
+Later, when you have paying customers: shift rosters, vehicle types, and
+payments.
 
 ---
 

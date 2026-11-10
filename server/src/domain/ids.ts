@@ -19,3 +19,12 @@ export const hashToken = (t: string): string => createHash('sha256').update(t).d
 
 export const nowIso = (): string => new Date().toISOString();
 export const addSeconds = (iso: string, s: number): string => new Date(new Date(iso).getTime() + s * 1000).toISOString();
+
+/** Organisation join code, e.g. ALPHA-7KQ2 (letters from the name + random). */
+export function newJoinCode(name: string): string {
+  const stem = (name.replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 5) || 'ORG').padEnd(3, 'X');
+  const bytes = randomBytes(4);
+  let out = '';
+  for (const b of bytes) out += ALPHABET[b % ALPHABET.length];
+  return `${stem}-${out}`;
+}

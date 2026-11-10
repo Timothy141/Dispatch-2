@@ -5,6 +5,7 @@ import type {
   ApiKey,
   ApiScope,
   Offer,
+  Organisation,
   PushSubscriptionRecord,
   Request,
   RequestSource,
@@ -45,7 +46,9 @@ export const mapResponder = (r: Row): Responder => ({
   phone: String(r.phone ?? ''),
   service: r.service as Service,
   unitName: String(r.unit_name),
-  organisation: str(r.organisation),
+  organisation: str(r.org_name) ?? str(r.organisation),
+  organisationId: str(r.organisation_id),
+  active: r.active === undefined || r.active === null ? true : Number(r.active) === 1,
   vehicle: str(r.vehicle),
   capabilities: json<string[]>(r.capabilities, []),
   status: r.status as ResponderStatus,
@@ -144,7 +147,20 @@ export const mapEvent = (r: Row): RequestEvent => ({
   createdAt: String(r.created_at),
 });
 
-const RESPONDER_SELECT = `SELECT r.*, u.name, u.phone FROM responders r JOIN users u ON u.id = r.user_id`;
+const RESPONDER_SELECT = `SELECT r.*, u.name, u.phone, o.name AS org_name FROM responders r JOIN users u ON u.id = r.user_id LEFT JOIN organisations o ON o.id = r.organisation_id`;
+
+export const mapOrganisation = (r: Row): Organisation => ({
+  id: String(r.id),
+  name: String(r.name),
+  services: json<Organisation['services']>(r.services, ['security']),
+  contactPhone: str(r.contact_phone),
+  joinCode: String(r.join_code),
+  coverage: r.coverage_lat != null && r.coverage_lng != null && r.coverage_radius_km != null ? { lat: Number(r.coverage_lat), lng: Number(r.coverage_lng), radiusKm: Number(r.coverage_radius_km) } : null,
+  active: Number(r.active) === 1,
+  unitCount: r.unit_count === undefined ? undefined : Number(r.unit_count),
+  createdAt: String(r.created_at),
+  updatedAt: String(r.updated_at),
+});
 const REQUEST_SELECT = `SELECT q.*, u.name AS requester_name, u.phone AS requester_phone FROM requests q JOIN users u ON u.id = q.requester_id`;
 
 export class Repositories {
@@ -185,9 +201,14 @@ export class Repositories {
     const r = row<Row>(this.db.prepare(`${RESPONDER_SELECT} WHERE r.user_id = ?`).get(userId));
     return r && mapResponder(r);
   }
-  listResponders(filter: { service?: Service; status?: ResponderStatus[] } = {}): Responder[] {
+  listResponders(filter: { service?: Service; status?: ResponderStatus[]; organisationId?: string; includeInactive?: boolean } = {}): Responder[] {
     const where: string[] = [];
     const params: unknown[] = [];
+    if (!filter.includeInactive) where.push('r.active = 1');
+    if (filter.organisationId) {
+      where.push('r.organisation_id = ?');
+      params.push(filter.organisationId);
+    }
     if (filter.service) {
       where.push('r.service = ?');
       params.push(filter.service);
@@ -204,20 +225,65 @@ export class Repositories {
     service: Service;
     unitName: string;
     organisation?: string | null;
+    organisationId?: string | null;
     vehicle?: string | null;
     capabilities?: string[];
   }): Responder {
     const t = nowIso();
     this.db
       .prepare(
-        `INSERT INTO responders (user_id, service, unit_name, organisation, vehicle, capabilities, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO responders (user_id, service, unit_name, organisation, organisation_id, vehicle, capabilities, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(user_id) DO UPDATE SET service = excluded.service, unit_name = excluded.unit_name,
-           organisation = excluded.organisation, vehicle = excluded.vehicle, capabilities = excluded.capabilities,
-           updated_at = excluded.updated_at`,
+           organisation = excluded.organisation, organisation_id = COALESCE(excluded.organisation_id, responders.organisation_id),
+           vehicle = excluded.vehicle, capabilities = excluded.capabilities, updated_at = excluded.updated_at`,
       )
-      .run(p.userId, p.service, p.unitName, p.organisation ?? null, p.vehicle ?? null, JSON.stringify(p.capabilities ?? []), t);
+      .run(p.userId, p.service, p.unitName, p.organisation ?? null, p.organisationId ?? null, p.vehicle ?? null, JSON.stringify(p.capabilities ?? []), t);
     return this.getResponder(p.userId)!;
+  }
+  /** Dispatcher-side edits to a unit. */
+  adminUpdateResponder(userId: string, patch: Partial<{ service: Service; unitName: string; organisationId: string | null; active: boolean; vehicle: string | null }>): Responder | undefined {
+    const cur = this.getResponder(userId);
+    if (!cur) return undefined;
+    const next = { ...cur, ...patch };
+    this.db
+      .prepare('UPDATE responders SET service = ?, unit_name = ?, organisation_id = ?, active = ?, vehicle = ?, updated_at = ? WHERE user_id = ?')
+      .run(next.service, next.unitName, next.organisationId, next.active ? 1 : 0, next.vehicle, nowIso(), userId);
+    return this.getResponder(userId);
+  }
+
+  // ---- organisations -----------------------------------------------------
+  listOrganisations(): Organisation[] {
+    return rows<Row>(
+      this.db.prepare('SELECT o.*, (SELECT COUNT(*) FROM responders r WHERE r.organisation_id = o.id AND r.active = 1) AS unit_count FROM organisations o ORDER BY o.name').all(),
+    ).map(mapOrganisation);
+  }
+  getOrganisation(id: string): Organisation | undefined {
+    const r = row<Row>(this.db.prepare('SELECT * FROM organisations WHERE id = ?').get(id));
+    return r && mapOrganisation(r);
+  }
+  getOrganisationByJoinCode(code: string): Organisation | undefined {
+    const r = row<Row>(this.db.prepare('SELECT * FROM organisations WHERE join_code = ?').get(code.trim().toUpperCase()));
+    return r && mapOrganisation(r);
+  }
+  createOrganisation(o: { name: string; services: Service[]; contactPhone?: string | null; joinCode: string; coverage?: Organisation['coverage'] }): Organisation {
+    const id = newId();
+    const t = nowIso();
+    this.db
+      .prepare(
+        'INSERT INTO organisations (id, name, services, contact_phone, join_code, coverage_lat, coverage_lng, coverage_radius_km, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)',
+      )
+      .run(id, o.name, JSON.stringify(o.services), o.contactPhone ?? null, o.joinCode, o.coverage?.lat ?? null, o.coverage?.lng ?? null, o.coverage?.radiusKm ?? null, t, t);
+    return this.getOrganisation(id)!;
+  }
+  updateOrganisation(id: string, patch: Partial<Pick<Organisation, 'name' | 'services' | 'contactPhone' | 'coverage' | 'active'>>): Organisation | undefined {
+    const cur = this.getOrganisation(id);
+    if (!cur) return undefined;
+    const next = { ...cur, ...patch };
+    this.db
+      .prepare('UPDATE organisations SET name = ?, services = ?, contact_phone = ?, coverage_lat = ?, coverage_lng = ?, coverage_radius_km = ?, active = ?, updated_at = ? WHERE id = ?')
+      .run(next.name, JSON.stringify(next.services), next.contactPhone, next.coverage?.lat ?? null, next.coverage?.lng ?? null, next.coverage?.radiusKm ?? null, next.active ? 1 : 0, nowIso(), id);
+    return this.getOrganisation(id);
   }
   setResponderStatus(userId: string, status: ResponderStatus): Responder | undefined {
     this.db.prepare('UPDATE responders SET status = ?, updated_at = ? WHERE user_id = ?').run(status, nowIso(), userId);
@@ -244,9 +310,17 @@ export class Repositories {
     const r = row<Row>(this.db.prepare(`${REQUEST_SELECT} WHERE q.id = ?`).get(id));
     return r && mapRequest(r);
   }
-  listRequests(filter: { status?: RequestStatus[]; requesterId?: string; responderId?: string; limit?: number } = {}): Request[] {
+  listRequests(filter: { status?: RequestStatus[]; requesterId?: string; responderId?: string; limit?: number; from?: string; to?: string } = {}): Request[] {
     const where: string[] = [];
     const params: unknown[] = [];
+    if (filter.from) {
+      where.push('q.created_at >= ?');
+      params.push(filter.from);
+    }
+    if (filter.to) {
+      where.push('q.created_at < ?');
+      params.push(filter.to);
+    }
     if (filter.status?.length) {
       where.push(`q.status IN (${filter.status.map(() => '?').join(',')})`);
       params.push(...filter.status);

@@ -34,7 +34,7 @@ export async function dispatcherRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/stats', guard, async () => ctx.repo.stats());
 
   // Backups of the database (also taken automatically every BACKUP_INTERVAL_HOURS).
-  app.get('/api/admin/backups', guard, async () => ({ enabled: ctx.backups.enabled, dir: ctx.backups.dir, backups: ctx.backups.list() }));
+  app.get('/api/admin/backups', guard, async () => ({ enabled: ctx.backups.enabled, offsite: ctx.backups.offsite, lastUpload: ctx.backups.lastUpload, dir: ctx.backups.dir, backups: ctx.backups.list() }));
   app.post('/api/admin/backups', guard, async (req, reply) => {
     if (!ctx.backups.enabled) return reply.code(409).send({ error: 'backups_disabled', message: 'Backups are disabled for in-memory databases or when BACKUP_INTERVAL_HOURS=0' });
     const r = ctx.backups.run();

@@ -110,6 +110,19 @@ export interface User {
   lastSeenAt: string;
 }
 
+export interface Organisation {
+  id: string;
+  name: string;
+  services: Service[];
+  contactPhone: string | null;
+  joinCode: string;
+  coverage: { lat: number; lng: number; radiusKm: number } | null;
+  active: boolean;
+  unitCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Responder {
   userId: string;
   name: string;
@@ -117,6 +130,8 @@ export interface Responder {
   service: Service;
   unitName: string;
   organisation: string | null;
+  organisationId: string | null;
+  active: boolean;
   vehicle: string | null;
   capabilities: string[];
   status: ResponderStatus;

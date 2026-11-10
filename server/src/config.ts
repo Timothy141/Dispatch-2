@@ -55,6 +55,17 @@ const EnvSchema = z.object({
   VAPID_PRIVATE_KEY: z.string().default(''),
   VAPID_SUBJECT: z.string().default('mailto:ops@example.com'),
 
+  /** OSRM-compatible router for road-based ETAs, e.g. https://router.project-osrm.org (evaluation only). Empty = straight-line. */
+  ROUTER_URL: z.string().default(''),
+
+  /** Optional off-site copy of each backup to S3-compatible storage (AWS S3, Backblaze B2, Cloudflare R2, MinIO). */
+  S3_ENDPOINT: z.string().default(''),
+  S3_BUCKET: z.string().default(''),
+  S3_REGION: z.string().default('us-east-1'),
+  S3_ACCESS_KEY: z.string().default(''),
+  S3_SECRET_KEY: z.string().default(''),
+  S3_PREFIX: z.string().default('dispatch-backups'),
+
   /** Automatic SQLite backups. 0 disables. */
   BACKUP_INTERVAL_HOURS: z.coerce.number().min(0).default(24),
   BACKUP_DIR: z.string().default(''),

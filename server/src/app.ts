@@ -8,6 +8,7 @@ import { makeAuthenticate } from './auth.js';
 import { loadConfig, type Config } from './config.js';
 import { openDatabase, type Db } from './db/db.js';
 import { InvalidTransitionError } from './domain/requestStateMachine.js';
+import { adminRoutes } from './routes/adminRoutes.js';
 import { authRoutes } from './routes/authRoutes.js';
 import { calloutRoutes } from './routes/calloutRoutes.js';
 import { dispatcherRoutes } from './routes/dispatcherRoutes.js';
@@ -24,6 +25,8 @@ import { createSmsProvider, type SmsProvider } from './services/smsService.js';
 import { ConflictError, ForbiddenError, NotFoundError } from './services/errors.js';
 import { EventBus } from './services/eventBus.js';
 import { Repositories } from './services/repositories.js';
+import { RoutingService } from './services/routingService.js';
+import { createS3Uploader } from './services/s3.js';
 import { WebhookService } from './services/webhookService.js';
 
 export interface AppContext {
@@ -38,6 +41,7 @@ export interface AppContext {
   otp: OtpService;
   push: PushService;
   backups: BackupService;
+  routing: RoutingService;
 }
 
 export interface BuildOptions {
@@ -64,9 +68,15 @@ export function buildContext(opts: BuildOptions = {}, log: FastifyInstance['log'
   const otp = new OtpService(repo, sms, { ttlSeconds: config.OTP_TTL_SECONDS });
   const auth = new AuthService(repo, config.DISPATCHER_CODE, { required: config.OTP_REQUIRED, verifier: otp });
   const dispatch = new DispatchService(repo, bus, config, log as never);
+  const routing = new RoutingService(config.ROUTER_URL, opts.fetchImpl, log as never);
+  dispatch.useRouting(routing);
   const push = new PushService(repo, bus, { publicKey: config.VAPID_PUBLIC_KEY, privateKey: config.VAPID_PRIVATE_KEY, subject: config.VAPID_SUBJECT }, log as never, opts.pushSender);
   push.start();
-  const backups = new BackupService(db, { dbPath: config.DATABASE_PATH, dir: config.BACKUP_DIR, intervalHours: config.BACKUP_INTERVAL_HOURS, keep: config.BACKUP_KEEP }, log as never);
+  const uploader =
+    config.S3_ENDPOINT && config.S3_BUCKET && config.S3_ACCESS_KEY && config.S3_SECRET_KEY
+      ? createS3Uploader({ endpoint: config.S3_ENDPOINT, bucket: config.S3_BUCKET, region: config.S3_REGION, accessKey: config.S3_ACCESS_KEY, secretKey: config.S3_SECRET_KEY, prefix: config.S3_PREFIX }, opts.fetchImpl)
+      : undefined;
+  const backups = new BackupService(db, { dbPath: config.DATABASE_PATH, dir: config.BACKUP_DIR, intervalHours: config.BACKUP_INTERVAL_HOURS, keep: config.BACKUP_KEEP }, log as never, uploader);
   backups.start();
   const webhooks = new WebhookService(
     repo,
@@ -75,7 +85,7 @@ export function buildContext(opts: BuildOptions = {}, log: FastifyInstance['log'
     log as never,
   );
   webhooks.start();
-  return { config, db, repo, bus, auth, dispatch, webhooks, sms, otp, push, backups };
+  return { config, db, repo, bus, auth, dispatch, webhooks, sms, otp, push, backups, routing };
 }
 
 export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance & { ctx: AppContext }> {
@@ -122,6 +132,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await responderRoutes(app, ctx);
   await dispatcherRoutes(app, ctx);
   await calloutRoutes(app, ctx);
+  await adminRoutes(app, ctx);
   await integrationRoutes(app, ctx);
   await eventRoutes(app, ctx);
 

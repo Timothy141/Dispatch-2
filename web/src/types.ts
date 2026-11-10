@@ -12,6 +12,36 @@ export interface User {
   phone: string;
 }
 
+export interface Organisation {
+  id: string;
+  name: string;
+  services: Service[];
+  contactPhone: string | null;
+  joinCode: string;
+  coverage: { lat: number; lng: number; radiusKm: number } | null;
+  active: boolean;
+  unitCount?: number;
+  createdAt: string;
+}
+
+export interface ReportSummary {
+  from: string;
+  to: string;
+  total: number;
+  byService: { service: Service; total: number; completed: number; cancelled: number; unfulfilled: number; open: number; avgAcceptSeconds: number | null; avgArrivalSeconds: number | null; p90ArrivalSeconds: number | null }[];
+  byUnit: { responderId: string; unitName: string; jobs: number; completed: number; avgArrivalSeconds: number | null; avgRating: number | null }[];
+}
+
+export interface AuditEntry {
+  id: string;
+  actor: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  details: unknown;
+  createdAt: string;
+}
+
 export interface Responder {
   userId: string;
   name: string;
@@ -19,6 +49,8 @@ export interface Responder {
   service: Service;
   unitName: string;
   organisation: string | null;
+  organisationId: string | null;
+  active: boolean;
   vehicle: string | null;
   status: ResponderStatus;
   lat: number | null;

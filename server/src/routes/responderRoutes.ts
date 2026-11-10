@@ -10,6 +10,8 @@ const ProfileBody = z.object({
   organisation: z.string().max(120).nullable().optional(),
   vehicle: z.string().max(120).nullable().optional(),
   capabilities: z.array(z.string().max(40)).max(20).optional(),
+  /** Code from the organisation's control room; links the unit to that organisation. */
+  joinCode: z.string().max(20).optional(),
 });
 const StatusBody = z.object({ status: z.enum(['available', 'offline']) });
 const LocationBody = z.object({
@@ -30,9 +32,18 @@ export async function responderRoutes(app: FastifyInstance, ctx: AppContext) {
     offers: ctx.dispatch.pendingOffersFor(req.user!),
   }));
 
-  app.put('/api/responders/me', guard, async (req) => {
-    const body = ProfileBody.parse(req.body);
-    const r = ctx.repo.upsertResponderProfile({ userId: req.user!.id, ...body });
+  app.put('/api/responders/me', guard, async (req, reply) => {
+    const { joinCode, ...body } = ProfileBody.parse(req.body);
+    let organisationId: string | null | undefined;
+    let organisation = body.organisation;
+    if (joinCode) {
+      const org = ctx.repo.getOrganisationByJoinCode(joinCode);
+      if (!org || !org.active) return reply.code(404).send({ error: 'not_found', message: 'Unknown organisation code' });
+      if (!org.services.includes(body.service)) return reply.code(409).send({ error: 'conflict', message: `${org.name} does not provide ${body.service} response` });
+      organisationId = org.id;
+      organisation = org.name;
+    }
+    const r = ctx.repo.upsertResponderProfile({ userId: req.user!.id, ...body, organisation, organisationId });
     ctx.repo.audit({ actor: req.user!.id, action: 'responder.profile', entityType: 'responder', entityId: r.userId, details: body });
     return r;
   });

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Api } from '../api';
+import { AdminPanel } from '../components/AdminPanel';
 import { CalloutModal } from '../components/CalloutModal';
 import { IntegrationsPanel } from '../components/IntegrationsPanel';
+import { ReportsPanel } from '../components/ReportsPanel';
 import { Map, type MapMarker } from '../components/Map';
 import { PriorityBadge, ServiceBadge, StatusBadge, Stepper, Timeline } from '../components/Common';
 import { ago, km, minutes, SERVICE_META } from '../format';
@@ -22,7 +24,7 @@ const TAB_STATUS: Record<Tab, string> = { open: 'searching,unfulfilled,assigned,
 const FALLBACK = { lat: -33.9249, lng: 18.4241 };
 
 export function DispatcherScreen({ api, catalogue, toast, onConnection, onStats }: Props) {
-  const [view, setView] = useState<'live' | 'integrations'>('live');
+  const [view, setView] = useState<'live' | 'reports' | 'admin' | 'integrations'>('live');
   const [calloutOpen, setCalloutOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('open');
   const [requests, setRequests] = useState<HelpRequest[]>([]);
@@ -109,18 +111,29 @@ export function DispatcherScreen({ api, catalogue, toast, onConnection, onStats 
 
   const mapCenter = sel ?? (markers[0] ? { lat: markers[0].lat, lng: markers[0].lng } : FALLBACK);
 
-  if (view === 'integrations') {
+  const VIEWS: { key: typeof view; label: string }[] = [
+    { key: 'live', label: 'Live' },
+    { key: 'reports', label: 'Reports' },
+    { key: 'admin', label: 'Admin' },
+    { key: 'integrations', label: 'Integrations' },
+  ];
+  const viewTabs = (
+    <div className="view-tabs">
+      {VIEWS.map((v) => (
+        <button key={v.key} className={`tab ${view === v.key ? 'active' : ''}`} onClick={() => setView(v.key)}>
+          {v.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (view !== 'live') {
     return (
       <div style={{ overflow: 'auto', minHeight: 0 }}>
-        <div className="col-head" style={{ position: 'static' }}>
-          <div className="view-tabs">
-            <button className="tab" onClick={() => setView('live')}>
-              Live
-            </button>
-            <button className="tab active">Integrations</button>
-          </div>
-        </div>
-        <IntegrationsPanel api={api} toast={toast} />
+        <div className="col-head" style={{ position: 'static' }}>{viewTabs}</div>
+        {view === 'reports' && <ReportsPanel api={api} toast={toast} />}
+        {view === 'admin' && <AdminPanel api={api} catalogue={catalogue} toast={toast} />}
+        {view === 'integrations' && <IntegrationsPanel api={api} toast={toast} />}
       </div>
     );
   }
@@ -149,12 +162,7 @@ export function DispatcherScreen({ api, catalogue, toast, onConnection, onStats 
             + New call-out
           </button>
           <span className="spacer" />
-          <div className="view-tabs">
-            <button className="tab active">Live</button>
-            <button className="tab" onClick={() => setView('integrations')}>
-              Integrations
-            </button>
-          </div>
+          {viewTabs}
         </div>
         <div className="col-head" style={{ top: 41 }}>
           Requests <span className="count">{requests.length}</span>

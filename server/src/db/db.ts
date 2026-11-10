@@ -36,4 +36,7 @@ function migrate(db: DatabaseSyncType) {
   const cols = new Set((db.prepare('PRAGMA table_info(requests)').all() as { name: string }[]).map((c) => c.name));
   if (!cols.has('source')) db.exec("ALTER TABLE requests ADD COLUMN source TEXT NOT NULL DEFAULT 'app'");
   if (!cols.has('created_by')) db.exec('ALTER TABLE requests ADD COLUMN created_by TEXT');
+  const rcols = new Set((db.prepare('PRAGMA table_info(responders)').all() as { name: string }[]).map((c) => c.name));
+  if (!rcols.has('organisation_id')) db.exec('ALTER TABLE responders ADD COLUMN organisation_id TEXT REFERENCES organisations(id) ON DELETE SET NULL');
+  if (!rcols.has('active')) db.exec('ALTER TABLE responders ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
 }
