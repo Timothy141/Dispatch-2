@@ -162,3 +162,18 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS push_subscriptions_user ON push_subscriptions(user_id);
+
+-- ---- organisations (response companies) ------------------------------------
+CREATE TABLE IF NOT EXISTS organisations (
+  id                  TEXT PRIMARY KEY,
+  name                TEXT NOT NULL,
+  services            TEXT NOT NULL DEFAULT '["security"]',
+  contact_phone       TEXT,
+  join_code           TEXT NOT NULL UNIQUE,
+  coverage_lat        REAL,
+  coverage_lng        REAL,
+  coverage_radius_km  REAL,
+  active              INTEGER NOT NULL DEFAULT 1,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);

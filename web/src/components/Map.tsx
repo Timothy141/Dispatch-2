@@ -62,8 +62,13 @@ export function Map({ center, zoom = 13, markers, trail = [], fit = false, onCli
     m.on('click', (e) => clickRef.current?.({ lat: e.latlng.lat, lng: e.latlng.lng }));
     map.current = m;
     return () => {
-      m.remove();
       map.current = null;
+      try {
+        m.stop(); // cancel any pan/zoom animation before tearing down
+        m.remove();
+      } catch {
+        /* Leaflet can throw if removed mid-animation; the DOM node is going away anyway */
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -71,7 +76,7 @@ export function Map({ center, zoom = 13, markers, trail = [], fit = false, onCli
   // recentre when center changes materially and we are not fitting bounds
   useEffect(() => {
     if (!map.current || fit) return;
-    map.current.setView([center.lat, center.lng], map.current.getZoom(), { animate: true });
+    map.current.setView([center.lat, center.lng], map.current.getZoom(), { animate: false });
   }, [center.lat, center.lng, fit]);
 
   useEffect(() => {

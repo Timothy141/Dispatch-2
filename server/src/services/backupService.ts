@@ -9,12 +9,17 @@ export class BackupService {
   private timer?: ReturnType<typeof setInterval>;
   readonly dir: string;
   readonly enabled: boolean;
+  readonly offsite: boolean;
+  private pending: Promise<unknown>[] = [];
+  lastUpload: { key: string; at: string } | { error: string; at: string } | null = null;
 
   constructor(
     private readonly db: Db,
     private readonly opts: { dbPath: string; dir: string; intervalHours: number; keep: number },
     private readonly log: Logger = console,
+    private readonly uploader?: (localPath: string, key: string) => Promise<string>,
   ) {
+    this.offsite = Boolean(uploader);
     this.enabled = opts.dbPath !== ':memory:' && opts.intervalHours > 0;
     this.dir = opts.dir || join(dirname(opts.dbPath), 'backups');
   }
@@ -43,7 +48,24 @@ export class BackupService {
     const bytes = statSync(file).size;
     this.prune();
     this.log.info({ file, bytes }, 'backup written');
+    if (this.uploader) {
+      const p = this.uploader(file, `dispatch-${stamp}.db`)
+        .then((key) => {
+          this.lastUpload = { key, at: new Date().toISOString() };
+          this.log.info({ key }, 'backup uploaded off-site');
+        })
+        .catch((err) => {
+          this.lastUpload = { error: err instanceof Error ? err.message : String(err), at: new Date().toISOString() };
+          this.log.error({ err }, 'off-site backup upload failed');
+        });
+      this.pending.push(p);
+    }
     return { file, bytes };
+  }
+  /** Tests: wait for uploads. */
+  async flush() {
+    await Promise.allSettled(this.pending);
+    this.pending = [];
   }
 
   list(): { file: string; bytes: number; at: string }[] {

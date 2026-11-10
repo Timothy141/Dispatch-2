@@ -1,4 +1,4 @@
-import type { ApiKey, Catalogue, DetailView, GeocodeHit, HelpRequest, LatLng, Offer, Responder, Role, Service, Stats, TrackView, User, Webhook, WebhookDelivery } from './types';
+import type { ApiKey, AuditEntry, Catalogue, Organisation, ReportSummary, DetailView, GeocodeHit, HelpRequest, LatLng, Offer, Responder, Role, Service, Stats, TrackView, User, Webhook, WebhookDelivery } from './types';
 
 export interface Session {
   token: string;
@@ -72,7 +72,7 @@ export function createApi(token: string) {
     rate: (id: string, rating: number, comment?: string) => c<HelpRequest>('POST', `/api/requests/${id}/rate`, { rating, comment }),
     // responder
     responderMe: () => c<{ responder: Responder | null; activeJob: HelpRequest | null; offers: { offer: Offer; request: HelpRequest }[] }>('GET', '/api/responders/me'),
-    saveProfile: (body: { service: Service; unitName: string; vehicle?: string; organisation?: string }) => c<Responder>('PUT', '/api/responders/me', body),
+    saveProfile: (body: { service: Service; unitName: string; vehicle?: string; organisation?: string; joinCode?: string }) => c<Responder>('PUT', '/api/responders/me', body),
     setStatus: (status: 'available' | 'offline') => c<Responder>('POST', '/api/responders/me/status', { status }),
     setLocation: (p: LatLng & { heading?: number | null }) => c<Responder>('POST', '/api/responders/me/location', p),
     accept: (offerId: string) => c<HelpRequest>('POST', `/api/offers/${offerId}/accept`),
@@ -101,7 +101,16 @@ export function createApi(token: string) {
     testWebhook: (id: string) => c<{ delivered: boolean }>('POST', `/api/integrations/webhooks/${id}/test`),
     pushSubscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) => c<{ ok: true }>('POST', '/api/push/subscriptions', sub),
     pushUnsubscribe: (endpoint: string) => c<{ ok: true }>('DELETE', '/api/push/subscriptions', { endpoint }),
-    backups: () => c<{ enabled: boolean; dir: string; backups: { file: string; bytes: number; at: string }[] }>('GET', '/api/admin/backups'),
+    backups: () => c<{ enabled: boolean; offsite: boolean; lastUpload: { key?: string; error?: string; at: string } | null; dir: string; backups: { file: string; bytes: number; at: string }[] }>('GET', '/api/admin/backups'),
+    audit: () => c<AuditEntry[]>('GET', '/api/audit?limit=100'),
+    organisations: () => c<Organisation[]>('GET', '/api/admin/organisations'),
+    createOrganisation: (body: { name: string; services: Service[]; contactPhone?: string | null; coverage?: Organisation['coverage'] }) => c<Organisation>('POST', '/api/admin/organisations', body),
+    updateOrganisation: (id: string, body: Partial<{ name: string; services: Service[]; contactPhone: string | null; coverage: Organisation['coverage']; active: boolean }>) => c<Organisation>('PATCH', `/api/admin/organisations/${id}`, body),
+    rotateJoinCode: (id: string) => c<Organisation>('POST', `/api/admin/organisations/${id}/rotate-code`),
+    units: () => c<Responder[]>('GET', '/api/admin/units'),
+    updateUnit: (id: string, body: Partial<{ service: Service; unitName: string; organisationId: string | null; active: boolean; vehicle: string | null }>) => c<Responder>('PATCH', `/api/admin/units/${id}`, body),
+    reportSummary: (from: string, to: string) => c<ReportSummary>('GET', `/api/reports/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    reportCsvUrl: (from: string, to: string) => `/api/reports/incidents.csv?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&token=${encodeURIComponent(token)}`,
     runBackup: () => c<{ file: string; bytes: number }>('POST', '/api/admin/backups'),
     eventsUrl: () => `/api/events?token=${encodeURIComponent(token)}`,
   };

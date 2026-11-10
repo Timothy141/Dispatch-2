@@ -55,6 +55,17 @@ room sees every unit and incident and can step in when nobody accepts.
   incident, request list with status steppers, request detail with offer
   history and timeline, manual assignment to any free unit, retry search,
   cancel. Header shows waiting/active counts and average accept/arrival times.
+- **Organisations**: response companies with a join code their officers
+  enter, optional coverage circles that limit which incidents their units are
+  offered, pause/resume, and a units table to rename, re-assign or deactivate
+  any unit from the control room.
+- **Reports**: per-service and per-unit response times (average accept,
+  average and 90th-percentile arrival), completion/cancellation counts, and a
+  CSV export for any date range.
+- **Road-based ETAs** from any OSRM-compatible router when `ROUTER_URL` is
+  set; straight-line estimates otherwise.
+- **Off-site backups** to S3-compatible storage (AWS, Backblaze B2, Cloudflare
+  R2, MinIO) in addition to local copies.
 - **Sign-in security**: optional SMS one-time code (`OTP_REQUIRED=true`) via
   Twilio or any JSON SMS gateway, rate-limited, single-use, 5 attempts.
 - **Push notifications**: responders' phones ring a new offer even with the
@@ -165,6 +176,23 @@ Choose the SMS provider with `SMS_PROVIDER`:
 - `http`: any gateway that accepts a JSON POST; set `SMS_HTTP_URL`,
   `SMS_HTTP_HEADERS`, `SMS_HTTP_BODY` (with `{to}` and `{text}`).
 
+## Organisations and coverage
+
+In **Agent / control room → Admin**, add each response company, tick the
+services it provides and optionally a coverage circle (centre and radius).
+Give the company its join code; officers enter it when setting up their unit
+and are then only offered incidents inside the coverage area. Units without
+an organisation are offered everything within `MAX_RADIUS_KM`. Pausing an
+organisation or deactivating a unit removes them from matching immediately
+(a unit on a job must finish first).
+
+## Reports
+
+**Admin → Reports** shows, for a date range, counts and response times by
+service and by unit, and downloads a CSV of every incident
+(`GET /api/reports/incidents.csv?from=&to=`). Summary JSON is at
+`GET /api/reports/summary`.
+
 ## Push notifications and backups
 
 Generate keys once with `npx web-push generate-vapid-keys` and set
@@ -174,8 +202,17 @@ feature is hidden and the live in-app updates still work.
 
 Backups run every `BACKUP_INTERVAL_HOURS` into `BACKUP_DIR` (default: a
 `backups` folder next to the database), keeping the newest `BACKUP_KEEP`.
-Dispatchers can list and trigger them at `/api/admin/backups`. Copy that
-folder off the server periodically (or rely on your host's disk snapshots).
+Dispatchers can list and trigger them at `/api/admin/backups` or in
+**Admin → Backups**. Set the `S3_*` variables to also upload every backup to
+S3-compatible object storage; the admin page shows the last upload result.
+
+## Road-based ETAs
+
+Set `ROUTER_URL` to an OSRM-compatible endpoint (your own OSRM, or
+`https://router.project-osrm.org` for evaluation only; it is rate limited
+and not for production). ETAs shown to requesters are then refined with
+actual road travel time after assignment and as the unit moves. Offers are
+still ranked by straight-line distance for speed.
 
 ## Integrating other cloud apps
 
@@ -221,6 +258,9 @@ endpoints (which use `x-api-key`) require
 | POST | `/api/auth/login` | – | `{ role, name, phone, dispatcherCode?, code? }` → `{ token, user }` |
 | POST/DELETE | `/api/push/subscriptions` | any | register / remove this browser for push |
 | GET/POST | `/api/admin/backups` | dispatcher | list / take a database backup |
+| GET/POST/PATCH | `/api/admin/organisations` (+ `/:id/rotate-code`) | dispatcher | response companies, join codes, coverage |
+| GET/PATCH | `/api/admin/units` | dispatcher | all units incl. deactivated; rename, move, deactivate |
+| GET | `/api/reports/summary` · `/api/reports/incidents.csv` | dispatcher | response-time report and export |
 | GET | `/api/catalogue` | – | services, quick flags, matching parameters |
 | GET | `/api/auth/me` | any | current user (+ responder profile) |
 | POST | `/api/requests` | requester | `{ service, lat, lng, address?, description?, flags? }` |
@@ -258,7 +298,9 @@ server/src
   services/webhookService.ts   signed outgoing webhooks with retries
   services/otpService.ts, smsService.ts   SMS one-time codes and providers
   services/pushService.ts      Web Push to responders and requesters
-  services/backupService.ts    scheduled SQLite backups
+  services/backupService.ts    scheduled SQLite backups (+ S3 upload via services/s3.ts)
+  services/routingService.ts   OSRM road-based ETA
+  routes/adminRoutes.ts        organisations, units, reports
   rateLimit.ts                 in-memory limiter for sign-in endpoints
   services/authService.ts      phone sign-in, bearer tokens
   services/repositories.ts     SQL access
@@ -283,9 +325,9 @@ Maps use OpenStreetMap tiles; the browser needs internet access to
 ## Roadmap / not yet included
 
 - Payments / subscriptions for paid response.
-- Turn-by-turn routing and road-based ETAs (currently straight-line estimate).
-- Organisation admin: manage units, shifts and coverage areas.
-- Reporting exports.
+- Shift rosters (today units simply go online and offline).
+- Running several server instances (the matching tick and rate limiter are
+  single-process; move to Postgres and a shared store first).
 
 ## License
 

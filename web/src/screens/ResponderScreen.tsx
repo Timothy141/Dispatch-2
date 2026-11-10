@@ -39,6 +39,7 @@ export function ResponderScreen({ api, user, catalogue, toast, onConnection }: P
   const [unitName, setUnitName] = useState('');
   const [vehicle, setVehicle] = useState('');
   const [organisation, setOrganisation] = useState('');
+  const [joinCode, setJoinCode] = useState('');
 
   const refresh = useCallback(async () => {
     try {
@@ -133,7 +134,7 @@ export function ResponderScreen({ api, user, catalogue, toast, onConnection }: P
           className="card form"
           onSubmit={(e) => {
             e.preventDefault();
-            act(() => api.saveProfile({ service, unitName: unitName.trim(), vehicle: vehicle.trim() || undefined, organisation: organisation.trim() || undefined }), 'Profile saved');
+            act(() => api.saveProfile({ service, unitName: unitName.trim(), vehicle: vehicle.trim() || undefined, organisation: organisation.trim() || undefined, joinCode: joinCode.trim() || undefined }), 'Profile saved');
           }}
         >
           <h2>Set up your unit</h2>
@@ -153,9 +154,16 @@ export function ResponderScreen({ api, user, catalogue, toast, onConnection }: P
             <input id="p-unit" value={unitName} onChange={(e) => setUnitName(e.target.value)} placeholder="e.g. Alpha 12" required />
           </div>
           <div className="field">
-            <label htmlFor="p-org">Organisation</label>
-            <input id="p-org" value={organisation} onChange={(e) => setOrganisation(e.target.value)} placeholder="e.g. Alpha Armed Response" />
+            <label htmlFor="p-code">Organisation join code</label>
+            <input id="p-code" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="e.g. ALPHA-7KQ2 (from your control room)" />
+            <div className="hint">Links you to your company so you only receive jobs in its coverage area. Leave empty if you operate independently.</div>
           </div>
+          {!joinCode && (
+            <div className="field">
+              <label htmlFor="p-org">Organisation (free text)</label>
+              <input id="p-org" value={organisation} onChange={(e) => setOrganisation(e.target.value)} placeholder="e.g. Alpha Armed Response" />
+            </div>
+          )}
           <div className="field">
             <label htmlFor="p-veh">Vehicle</label>
             <input id="p-veh" value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="e.g. White Ranger CA 412-981" />

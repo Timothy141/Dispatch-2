@@ -15,6 +15,7 @@ import {
 import { ConflictError, ForbiddenError, NotFoundError } from './errors.js';
 import type { EventBus } from './eventBus.js';
 import type { Repositories } from './repositories.js';
+import type { RoutingService } from './routingService.js';
 
 export interface CreateRequestInput {
   service: Service;
@@ -49,12 +50,45 @@ type Logger = { info: (o: unknown, m?: string) => void; warn: (o: unknown, m?: s
  * tests; the server calls it every second.
  */
 export class DispatchService {
+  private routing?: RoutingService;
+  private routingPending: Promise<unknown>[] = [];
+  private lastRouted = new Map<string, number>();
+
   constructor(
     private readonly repo: Repositories,
     private readonly bus: EventBus,
     private readonly cfg: MatchingConfig,
     private readonly log: Logger = console,
   ) {}
+
+  useRouting(routing: RoutingService) {
+    this.routing = routing;
+  }
+  /** Tests: wait for in-flight routed ETA refinements. */
+  async flushRouting() {
+    await Promise.allSettled(this.routingPending);
+    this.routingPending = [];
+  }
+
+  /** Replace the straight-line ETA with a road-based one when a router is configured. */
+  private refineEta(requestId: string, force = false) {
+    if (!this.routing?.enabled) return;
+    const last = this.lastRouted.get(requestId) ?? 0;
+    if (!force && Date.now() - last < 15_000) return;
+    this.lastRouted.set(requestId, Date.now());
+    const p = (async () => {
+      const req = this.repo.getRequest(requestId);
+      if (!req || !req.responderId || !ACTIVE_JOB_STATUSES.includes(req.status) || req.status === 'arrived') return;
+      const r = this.repo.getResponder(req.responderId);
+      if (!r || r.lat == null || r.lng == null) return;
+      const est = await this.routing!.estimate({ lat: r.lat, lng: r.lng }, req);
+      if (!est) return;
+      const eta = est.durationS + 60;
+      const updated = this.repo.updateRequest(requestId, { etaSeconds: eta });
+      if (updated) this.bus.publish('responder.location', { requestId, responderId: r.userId, lat: r.lat, lng: r.lng, heading: r.heading, distanceM: est.distanceM, etaSeconds: eta, routed: true, at: r.locationAt }, { requesterId: req.requesterId, responderIds: [r.userId] });
+    })().catch((err) => this.log.warn({ err, requestId }, 'eta refinement failed'));
+    this.routingPending.push(p);
+  }
 
   // ======================================================================
   // Requester side
@@ -195,6 +229,7 @@ export class DispatchService {
 
   setResponderStatus(responderUser: User, status: ResponderStatus): Responder {
     const r = this.mustGetResponder(responderUser.id);
+    if (!r.active && status === 'available') throw new ConflictError('This unit has been deactivated by the control room');
     if (r.status === 'busy' && status !== 'busy') {
       const job = this.activeJobFor(r.userId);
       if (job) throw new ConflictError(`Finish or release job ${job.reference} before going ${status}`);
@@ -229,6 +264,7 @@ export class DispatchService {
         { requestId: job.id, responderId: r.userId, lat, lng, heading, distanceM, etaSeconds: eta, at: updated.locationAt },
         { requesterId: job.requesterId, responderIds: [r.userId] },
       );
+      this.refineEta(job.id);
     } else {
       this.bus.publish('responder.location', { responderId: r.userId, lat, lng, heading, at: updated.locationAt }, {});
       // An available unit that just became locatable (or moved) may now be in range of a waiting request.
@@ -383,9 +419,17 @@ export class DispatchService {
         .map((o) => o.responderId),
     );
     const staleBefore = Date.now() - this.cfg.LOCATION_STALE_SECONDS * 1000;
+    const orgs = new Map(this.repo.listOrganisations().map((o) => [o.id, o]));
+    const covers = (r: Responder) => {
+      if (!r.organisationId) return true; // independent unit
+      const org = orgs.get(r.organisationId);
+      if (!org || !org.active) return false;
+      if (!org.coverage) return true;
+      return haversineM(org.coverage, req) <= org.coverage.radiusKm * 1000;
+    };
     const candidates = this.repo
       .listResponders({ service: req.service, status: ['available'] })
-      .filter((r) => !asked.has(r.userId) && r.lat != null && r.lng != null && r.locationAt && new Date(r.locationAt).getTime() >= staleBefore)
+      .filter((r) => !asked.has(r.userId) && r.lat != null && r.lng != null && r.locationAt && new Date(r.locationAt).getTime() >= staleBefore && covers(r))
       .map((r) => ({ r, distanceM: Math.round(haversineM(r as { lat: number; lng: number }, req)) }))
       .filter((c) => c.distanceM <= this.cfg.MAX_RADIUS_KM * 1000)
       .sort((a, b) => a.distanceM - b.distanceM)
@@ -459,6 +503,7 @@ export class DispatchService {
     this.repo.audit({ actor, action: 'request.assigned', entityType: 'request', entityId: req.id, details: { responderId: responder.userId, eta } });
     this.bus.publish('responder.updated', this.repo.getResponder(responder.userId), { responderIds: [responder.userId] });
     this.publishRequest('request.updated', updated);
+    this.refineEta(req.id, true);
     return updated;
   }
 
